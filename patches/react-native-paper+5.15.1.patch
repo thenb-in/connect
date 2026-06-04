@@ -1,0 +1,35 @@
+diff --git a/node_modules/react-native-paper/src/components/MaterialCommunityIcon.tsx b/node_modules/react-native-paper/src/components/MaterialCommunityIcon.tsx
+index 52719bd..ca26125 100644
+--- a/node_modules/react-native-paper/src/components/MaterialCommunityIcon.tsx
++++ b/node_modules/react-native-paper/src/components/MaterialCommunityIcon.tsx
+@@ -35,22 +35,18 @@ export const accessibilityProps: AccessibilityProps =
+       };
+ 
+ /**
+- * Loads the appropriate icon module based on available dependencies
++ * Loads the icon module. Patched by call_buddy to avoid Metro's
++ * dependency-map-shift bug with optional requires that miss @expo/vector-icons.
++ * We require only the installed package directly — react-native-vector-icons,
++ * whose MaterialCommunityIcons font is already linked (android fonts.gradle +
++ * iOS Info.plist). The newer @react-native-vector-icons/material-design-icons
++ * needs an unlinked native 'VectorIcons' TurboModule, so we avoid it.
+  */
+ const loadIconModule = () => {
+   try {
+-    return require('@react-native-vector-icons/material-design-icons').default;
++    return require('react-native-vector-icons/MaterialCommunityIcons').default;
+   } catch (e) {
+-    try {
+-      return require('@expo/vector-icons/MaterialCommunityIcons').default;
+-    } catch (e) {
+-      try {
+-        return require('react-native-vector-icons/MaterialCommunityIcons')
+-          .default;
+-      } catch (e) {
+-        return null;
+-      }
+-    }
++    return null;
+   }
+ };
+ 

@@ -1,0 +1,37 @@
+diff --git a/node_modules/react-native-contacts/ios/RCTContacts/RCTContacts.mm b/node_modules/react-native-contacts/ios/RCTContacts/RCTContacts.mm
+index e78ecd0..96e667c 100644
+--- a/node_modules/react-native-contacts/ios/RCTContacts/RCTContacts.mm
++++ b/node_modules/react-native-contacts/ios/RCTContacts/RCTContacts.mm
+@@ -293,6 +293,8 @@ -(NSMutableArray*) retrieveContactsFromAddressBook:(CNContactStore*)contactStore
+         CNContactFamilyNameKey,
+         CNContactGivenNameKey,
+         CNContactMiddleNameKey,
++        CNContactNamePrefixKey,
++        CNContactNameSuffixKey,
+         CNContactPostalAddressesKey,
+         CNContactOrganizationNameKey,
+         CNContactJobTitleKey,
+@@ -328,6 +330,8 @@ -(NSDictionary*) contactToDictionary:(CNContact *) person
+     NSString *givenName = person.givenName;
+     NSString *familyName = person.familyName;
+     NSString *middleName = person.middleName;
++    NSString *namePrefix = person.namePrefix;
++    NSString *nameSuffix = person.nameSuffix;
+     NSString *company = person.organizationName;
+     NSString *jobTitle = person.jobTitle;
+     NSDateComponents *birthday = person.birthday;
+@@ -346,6 +350,14 @@ -(NSDictionary*) contactToDictionary:(CNContact *) person
+         [output setObject: (middleName) ? middleName : @"" forKey:@"middleName"];
+     }
+ 
++    if(namePrefix){
++        [output setObject: (namePrefix) ? namePrefix : @"" forKey:@"prefix"];
++    }
++
++    if(nameSuffix){
++        [output setObject: (nameSuffix) ? nameSuffix : @"" forKey:@"suffix"];
++    }
++
+     if(company){
+         [output setObject: (company) ? company : @"" forKey:@"company"];
+     }
