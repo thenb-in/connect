@@ -658,6 +658,30 @@ const SettingsScreen = ({ navigation, mode = 'guest', user, onLogin, onLogout })
 
           <TouchableOpacity
             style={styles.row}
+            onPress={() => navigation.navigate('ConnectCallLogs')}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+              <Icon name="phone-log" size={20} color={theme.colors.primary} />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>View saved call logs</Text>
+              <Text style={styles.rowSubtitle}>
+                See the call history Connect has stored on this device —
+                number, date &amp; time, and duration of each call.
+              </Text>
+            </View>
+            <Icon
+              name="chevron-right"
+              size={22}
+              color={theme.colors.textSubtle}
+            />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity
+            style={styles.row}
             onPress={openFlow}
             activeOpacity={0.7}
           >

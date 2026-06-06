@@ -11,6 +11,7 @@ import ContactDetailScreen from '../screens/ContactDetailScreen';
 import OnboardingScreen from '../screens/OnboardingScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import BulkCategoriseScreen from '../screens/BulkCategoriseScreen';
+import CallLogsScreen from '../screens/CallLogsScreen';
 import { isOnboarded, setOnboarded } from '../storage';
 
 const Stack = createStackNavigator();
@@ -168,6 +169,7 @@ const ConnectStack = ({ mode, onLogin, onSelectMode, onExitConnect, user, onLogo
 
       <Stack.Screen name="ConnectGroupDetail" component={GroupDetailScreen} />
       <Stack.Screen name="ConnectContactDetail" component={ContactDetailScreen} />
+      <Stack.Screen name="ConnectCallLogs" component={CallLogsScreen} />
       <Stack.Screen name="ConnectBulkCategorise" component={BulkCategoriseScreen} />
     </Stack.Navigator>
   );
