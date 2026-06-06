@@ -424,9 +424,10 @@ const getGroupCounts = (analysis) => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   lastSynced: {
-    color: theme.colors.success,
+    color: theme.colors.primary,
     fontSize: theme.font.tiny,
     fontWeight: '600',
+    fontStyle: 'italic',
     textAlign: 'center',
     paddingTop: theme.spacing.sm,
   },
