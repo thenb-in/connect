@@ -68,7 +68,7 @@ const FIELDS = [
     hint:
       'Quirks the LLM should know — e.g. "I save relatives as <relation> <name>", "office contacts get a · suffix".',
     placeholder:
-      'I prefix family with their relation. Helpers get a role suffix like "Driver", "Maid".',
+      "Some of my dad's friends are saved in my phone and have suffix uncle, they aren't relatives.",
     isList: false,
   },
 ];
@@ -152,8 +152,7 @@ const UserContextModal = ({ visible, onClose, onSaved, onSkipped }) => {
             <Text style={styles.title}>Tell us about you</Text>
             <Text style={styles.body}>
               A few quick facts so the LLM can name your groups correctly —
-              "IIT-B friends" instead of "Cluster IITB". All optional, all
-              stored locally.
+              "IIT-B friends". All optional, all stored locally.
             </Text>
 
             <ScrollView
@@ -179,7 +178,7 @@ const UserContextModal = ({ visible, onClose, onSaved, onSkipped }) => {
                     onChangeText={onChange(f.key)}
                     placeholder={f.placeholder}
                     placeholderTextColor={theme.colors.textSubtle}
-                    autoCapitalize="words"
+                    autoCapitalize={f.isList ? 'words' : 'sentences'}
                     autoCorrect={false}
                     multiline={!f.isList}
                   />

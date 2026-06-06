@@ -20,10 +20,27 @@ const categoryFor = (id) => CATEGORY_BY_ID[id] || FALLBACK_CATEGORY;
 const groupSignature = (g) =>
   `${(g.categoryId || 'unknown').toLowerCase()}::${(g.name || '').trim().toLowerCase()}`;
 
+// True for the anonymous name-token seeds named "Cluster: <token>". Label /
+// partition groups (Friends, Helpers, Office – X) never carry this prefix.
+const isBareCluster = (name) => /^Cluster: /.test(name || '');
+
+// Display order shared by the Local and "Sent to LLM" screens: named label /
+// group seeds stay on top (in their incoming order), then the bare
+// "Cluster: <token>" seeds, biggest first. `count` reads the member count off
+// whichever shape the caller has (.members array vs a precomputed .count).
+const labelsUpClustersDown = (count) => (x, y) => {
+  const bx = isBareCluster(x.name);
+  const by = isBareCluster(y.name);
+  if (bx !== by) return bx ? 1 : -1;
+  if (!bx) return 0;
+  return count(y) - count(x);
+};
+
 const TABS = [
   { id: 'local', label: 'Local' },
   { id: 'sent', label: 'Sent to LLM' },
   { id: 'received', label: 'LLM reply' },
+  { id: 'transform', label: 'Transform' },
   { id: 'proposed', label: 'Proposed' },
 ];
 
@@ -41,6 +58,8 @@ const formatBytes = (n) => {
  * BEFORE the proposal is committed to MMKV. Lets the user:
  *
  *   - Review the group skeleton (names + categories + member counts).
+ *   - Tap a proposed group to expand its member contact names.
+ *   - Merge one proposed group into another (combines members, drops source).
  *   - Remove any proposed group they don't want.
  *   - Add their own custom groups inline.
  *
@@ -81,6 +100,16 @@ const CategoriseProposalModal = ({
   const [tabId, setTabId] = useState('local');
   const [expandedGroupId, setExpandedGroupId] = useState(null);
   const [showAllCards, setShowAllCards] = useState({});
+  // Index of the proposed group the user is merging FROM. While non-null the
+  // Proposed tab switches into "pick a target" mode: every other group row
+  // becomes a merge target and editing (remove / add) is paused.
+  const [mergeSourceIdx, setMergeSourceIdx] = useState(null);
+  // Undo stack of prior `groups` snapshots. Every edit (merge / remove / add)
+  // pushes the pre-change array here so a mistaken merge can be reverted.
+  const [history, setHistory] = useState([]);
+  // Local-tab contact search: type a name to see which local group(s) /
+  // cluster(s) that contact was assigned to.
+  const [localSearch, setLocalSearch] = useState('');
 
   useEffect(() => {
     if (visible && proposal) {
@@ -91,10 +120,23 @@ const CategoriseProposalModal = ({
       setTabId('local');
       setExpandedGroupId(null);
       setShowAllCards({});
+      setLocalSearch('');
+      setMergeSourceIdx(null);
+      setHistory([]);
     }
   }, [visible, proposal]);
 
   const trace = proposal?.trace;
+  // Phone → name lookup so a proposed group's phone-keyed members can be
+  // shown as contact names when the user taps to expand it.
+  const nameByPhone = useMemo(() => proposal?.nameByPhone || {}, [proposal]);
+  const memberNamesOf = useCallback(
+    (g) =>
+      (g?.members || [])
+        .map((p) => nameByPhone[p] || p)
+        .sort((a, b) => String(a).localeCompare(String(b))),
+    [nameByPhone],
+  );
 
   const originalSignatures = useMemo(
     () => new Set((proposal?.groups || []).map(groupSignature)),
@@ -110,21 +152,62 @@ const CategoriseProposalModal = ({
     return false;
   }, [originalSignatures, editedSignatures]);
 
+  // Snapshot the current groups onto the undo stack before a mutation. Reads
+  // `groups` from the closure (not a functional updater) so the same array we
+  // record is the one we transform — keeps undo and the edit in lockstep, and
+  // avoids double-pushing under React's dev-mode double-invoked updaters.
+  const pushHistory = useCallback(() => {
+    setHistory((h) => [...h, groups]);
+  }, [groups]);
+
   const handleRemove = useCallback((index) => {
-    setGroups((cur) => cur.filter((_, i) => i !== index));
-  }, []);
+    setExpandedGroupId(null);
+    pushHistory();
+    setGroups(groups.filter((_, i) => i !== index));
+  }, [groups, pushHistory]);
+
+  // Merge the source group's members into the target group (dedup by phone),
+  // keep the target's name + category, and drop the source group. Map first,
+  // then filter, so `targetIdx` still points at the right entry while we
+  // build the merged member list.
+  const handleMerge = useCallback((sourceIdx, targetIdx) => {
+    setExpandedGroupId(null);
+    setMergeSourceIdx(null);
+    if (sourceIdx === targetIdx) return;
+    const src = groups[sourceIdx];
+    const tgt = groups[targetIdx];
+    if (!src || !tgt) return;
+    const mergedMembers = [
+      ...new Set([...(tgt.members || []), ...(src.members || [])]),
+    ];
+    pushHistory();
+    setGroups(
+      groups
+        .map((g, i) => (i === targetIdx ? { ...g, members: mergedMembers } : g))
+        .filter((_, i) => i !== sourceIdx),
+    );
+  }, [groups, pushHistory]);
 
   const handleAdd = useCallback(() => {
     const trimmed = addName.trim();
     if (!trimmed) return;
     const sig = `${addCategoryId.toLowerCase()}::${trimmed.toLowerCase()}`;
-    setGroups((cur) => {
-      if (cur.some((g) => groupSignature(g) === sig)) return cur;
-      return [...cur, { name: trimmed, categoryId: addCategoryId, members: [] }];
-    });
+    if (!groups.some((g) => groupSignature(g) === sig)) {
+      pushHistory();
+      setGroups([...groups, { name: trimmed, categoryId: addCategoryId, members: [] }]);
+    }
     setAddName('');
     setAddOpen(false);
-  }, [addName, addCategoryId]);
+  }, [addName, addCategoryId, groups, pushHistory]);
+
+  // Revert the most recent edit (merge / remove / add).
+  const handleUndo = useCallback(() => {
+    if (!history.length) return;
+    setExpandedGroupId(null);
+    setMergeSourceIdx(null);
+    setGroups(history[history.length - 1]);
+    setHistory(history.slice(0, -1));
+  }, [history]);
 
   const totalMembers = useMemo(
     () => groups.reduce((acc, g) => acc + (g.members?.length || 0), 0),
@@ -150,6 +233,17 @@ const CategoriseProposalModal = ({
       if (!trace || trace.llm.skipped) return 'No LLM response — the model was skipped.';
       return `${trace.llm.totalTokens.toLocaleString()} tokens used · raw response below.`;
     }
+    if (tabId === 'transform') {
+      const steps = trace?.transforms || [];
+      if (!steps.length) {
+        return 'How each group became a proposed group.';
+      }
+      const dropped = steps.filter((s) => s.toName == null).length;
+      const droppedSuffix = dropped
+        ? ` · ${dropped} dropped`
+        : '';
+      return `${steps.length} ${steps.length === 1 ? 'group' : 'groups'} reshaped into ${groups.length} proposed${droppedSuffix}.`;
+    }
     if (isEdited) {
       return `${groups.length} groups · ~${totalMembers} contacts tagged.`;
     }
@@ -168,6 +262,80 @@ const CategoriseProposalModal = ({
       );
     }
     const { groups: localGroups, legacyClusters } = trace.local;
+
+    // Search across every locally-assigned group AND legacy cluster, keyed by
+    // contact name, so one matching contact shows all the clusters it landed
+    // in (a name can match a label cluster and a name-token cluster at once).
+    const query = localSearch.trim().toLowerCase();
+    const searchResults = (() => {
+      if (!query) return null;
+      const byContact = new Map();
+      const collect = (clusterName, memberNames) => {
+        (memberNames || []).forEach((nm) => {
+          if (!nm.toLowerCase().includes(query)) return;
+          if (!byContact.has(nm)) byContact.set(nm, new Set());
+          byContact.get(nm).add(clusterName);
+        });
+      };
+      localGroups.forEach((g) => collect(g.name, g.memberNames));
+      (legacyClusters || []).forEach((c) => collect(c.name, c.memberNames));
+      return [...byContact.entries()]
+        .map(([name, clusters]) => ({ name, clusters: [...clusters] }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    })();
+
+    return (
+      <>
+        <View style={styles.searchRow}>
+          <Icon name="magnify" size={18} color={theme.colors.textSubtle} />
+          <TextInput
+            style={styles.searchInput}
+            value={localSearch}
+            onChangeText={setLocalSearch}
+            placeholder="Search a contact to see its cluster"
+            placeholderTextColor={theme.colors.textSubtle}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {localSearch ? (
+            <TouchableOpacity onPress={() => setLocalSearch('')} hitSlop={8}>
+              <Icon name="close" size={18} color={theme.colors.textMuted} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {searchResults ? (
+          searchResults.length === 0 ? (
+            <Text style={styles.emptyText}>
+              No locally-clustered contact matches “{localSearch.trim()}”. It may
+              have gone straight to the LLM batch (check the “Sent to LLM” tab).
+            </Text>
+          ) : (
+            <>
+              <Text style={styles.helperText}>
+                {searchResults.length}{' '}
+                {searchResults.length === 1 ? 'contact' : 'contacts'} matched.
+              </Text>
+              {searchResults.map((r, idx) => (
+                <View key={`search-${idx}`} style={styles.row}>
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowName} numberOfLines={1}>{r.name}</Text>
+                    <Text style={styles.memberList}>
+                      {r.clusters.join('  •  ')}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </>
+          )
+        ) : (
+          renderLocalLists(localGroups, legacyClusters)
+        )}
+      </>
+    );
+  };
+
+  const renderLocalLists = (localGroups, legacyClusters) => {
     return (
       <>
         {localGroups.length === 0 ? (
@@ -223,18 +391,43 @@ const CategoriseProposalModal = ({
               Label-regex / surname matches. Used as hints in the LLM prompt,
               not committed directly.
             </Text>
-            {legacyClusters.map((c, idx) => (
-              <View key={`legacy-${idx}`} style={styles.compactRow}>
-                <View
-                  style={[
-                    styles.dot,
-                    { backgroundColor: categoryFor(c.categoryId).color },
-                  ]}
-                />
-                <Text style={styles.rowName}>{c.name}</Text>
-                <Text style={styles.compactMeta}>{c.count}</Text>
-              </View>
-            ))}
+            {[...legacyClusters]
+              .sort(labelsUpClustersDown((c) => c.count || 0))
+              .map((c, idx) => {
+              const key = `legacy-${idx}`;
+              const expanded = expandedGroupId === key;
+              const names = c.memberNames || [];
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={styles.compactRow}
+                  onPress={() => setExpandedGroupId(expanded ? null : key)}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.dot,
+                      { backgroundColor: categoryFor(c.categoryId).color },
+                    ]}
+                  />
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowName} numberOfLines={1}>{c.name}</Text>
+                    {expanded && names.length ? (
+                      <Text style={styles.memberList}>{names.join(', ')}</Text>
+                    ) : null}
+                  </View>
+                  {c.source ? (
+                    <Text style={styles.clusterSource}>{c.source}</Text>
+                  ) : null}
+                  <Text style={styles.compactMeta}>{c.count}</Text>
+                  <Icon
+                    name={expanded ? 'chevron-up' : 'chevron-down'}
+                    size={16}
+                    color={theme.colors.textSubtle}
+                  />
+                </TouchableOpacity>
+              );
+            })}
           </>
         ) : null}
       </>
@@ -254,12 +447,41 @@ const CategoriseProposalModal = ({
         </Text>
       );
     }
+    const context = trace.llm.context;
     return (
       <>
+        {context ? (
+          <View style={styles.contextBlock}>
+            <Text style={styles.subsectionTitle}>Context sent with every prompt</Text>
+            {context.provider ? (
+              <View style={styles.contextRow}>
+                <Text style={styles.contextLabel}>Provider</Text>
+                <Text style={styles.contextValue}>{context.provider}</Text>
+              </View>
+            ) : null}
+            {context.profile?.length ? (
+              context.profile.map((row, idx) => (
+                <View key={`ctx-${idx}`} style={styles.contextRow}>
+                  <Text style={styles.contextLabel}>{row.label}</Text>
+                  <Text style={styles.contextValue}>{row.value}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.helperText}>
+                No personal context provided — add details in "Tell us about you"
+                so the model can name groups like "IIT-B friends".
+              </Text>
+            )}
+          </View>
+        ) : null}
         {trace.llm.batches.map((b) => {
           const showAll = !!showAllCards[b.index];
-          const visibleCards = showAll ? b.contactCards : b.contactCards.slice(0, 15);
-          const hidden = b.contactCards.length - visibleCards.length;
+          // In the hybrid path no flat contact cards are sent — the model
+          // works only from the seed clusters above — so `contactCards` is
+          // null. Constrained mode still sends them.
+          const cards = b.contactCards || [];
+          const visibleCards = showAll ? cards : cards.slice(0, 15);
+          const hidden = cards.length - visibleCards.length;
           return (
             <View key={`batch-${b.index}`} style={styles.batchBlock}>
               <Text style={styles.batchHeader}>
@@ -271,7 +493,9 @@ const CategoriseProposalModal = ({
                   <Text style={styles.subsectionTitle}>
                     Seed clusters in prompt ({b.seedClusters.length})
                   </Text>
-                  {b.seedClusters.map((s, idx) => (
+                  {[...b.seedClusters]
+                    .sort(labelsUpClustersDown((s) => s.members?.length || 0))
+                    .map((s, idx) => (
                     <View key={`seed-${b.index}-${idx}`} style={styles.compactRow}>
                       <View
                         style={[
@@ -290,9 +514,11 @@ const CategoriseProposalModal = ({
                 </>
               ) : null}
 
-              <Text style={styles.subsectionTitle}>
-                Contact cards ({b.contactCards.length})
-              </Text>
+              {cards.length ? (
+                <Text style={styles.subsectionTitle}>
+                  Contact cards ({cards.length})
+                </Text>
+              ) : null}
               {visibleCards.map((c, idx) => (
                 <View key={`card-${b.index}-${idx}`} style={styles.cardRow}>
                   <Text style={styles.cardName}>{c.name}</Text>
@@ -341,8 +567,11 @@ const CategoriseProposalModal = ({
                   Batch {b.index + 1} · parse failed
                 </Text>
                 <Text style={styles.helperText}>
-                  The model returned a response we couldn't parse as JSON. Raw
-                  output ({formatBytes(b.rawResponseSize)}):
+                  {b.parseFailReason ||
+                    "The model returned a response we couldn't parse as JSON."}
+                </Text>
+                <Text style={styles.helperText}>
+                  Raw output ({formatBytes(b.rawResponseSize)}):
                 </Text>
                 <Text style={styles.rawBlock}>{b.rawResponse}</Text>
               </View>
@@ -358,7 +587,7 @@ const CategoriseProposalModal = ({
               </Text>
               <Text style={styles.helperText}>
                 Raw model output, before our suffix-stripping / dedup /
-                hallucination-rejection / 10% threshold passes.
+                hallucination-rejection passes.
               </Text>
               {parsed.map((g, idx) => {
                 const cat = categoryFor(g.categoryId);
@@ -380,11 +609,6 @@ const CategoriseProposalModal = ({
                       <Text style={styles.rowMeta}>
                         {cat.name} · {count} {count === 1 ? 'contact' : 'contacts'}
                       </Text>
-                      {Array.isArray(g.cueTokens) && g.cueTokens.length ? (
-                        <Text style={styles.cueLine}>
-                          cues: {g.cueTokens.join(', ')}
-                        </Text>
-                      ) : null}
                       {expanded ? (
                         <Text style={styles.memberList}>
                           {g.memberNames.join(', ')}
@@ -402,6 +626,105 @@ const CategoriseProposalModal = ({
             </View>
           );
         })}
+      </>
+    );
+  };
+
+  // "Transform" tab: walks every group the model returned (and every group
+  // local heuristics claimed) through the post-LLM constraint pass — collapse
+  // to Family/Helpers, Office rename/downgrade, dedup-merge, empty-drop — so
+  // the user can see exactly how the "LLM reply" turned into "Proposed".
+  const renderTransformTab = () => {
+    if (!trace) {
+      return <Text style={styles.emptyText}>No trace available.</Text>;
+    }
+    const steps = trace.transforms || [];
+    if (!steps.length) {
+      return (
+        <Text style={styles.helperText}>
+          {trace.mode === 'constrained'
+            ? "Nothing was reshaped — contacts were slotted straight into your existing groups, so each group's name and category are unchanged."
+            : 'No transformations were recorded for this run.'}
+        </Text>
+      );
+    }
+    // Model output first, then locally-claimed groups — the user reads this
+    // as "here's what the LLM said and what we did with it", with the local
+    // pre-assignments as a secondary section.
+    const sections = [
+      { origin: 'llm', title: 'From the model', items: steps.filter((s) => s.origin === 'llm') },
+      { origin: 'local', title: 'From local rules / your address book', items: steps.filter((s) => s.origin !== 'llm') },
+    ].filter((s) => s.items.length);
+
+    return (
+      <>
+        <Text style={styles.helperText}>
+          Member counts are after names the model invented were dropped. Groups
+          with the same final name and category are merged into one proposed
+          group.
+        </Text>
+        {sections.map((section) => (
+          <View key={section.origin}>
+            <Text style={styles.sectionTitle}>
+              {section.title} ({section.items.length})
+            </Text>
+            {section.items.map((s, idx) => {
+              const fromCat = categoryFor(s.fromCategoryId);
+              const dropped = s.toName == null;
+              const toCat = categoryFor(s.toCategoryId);
+              const renamed =
+                !dropped &&
+                (s.toName !== s.fromName || s.toCategoryId !== s.fromCategoryId);
+              return (
+                <View
+                  key={`xf-${section.origin}-${idx}`}
+                  style={styles.transformBlock}
+                >
+                  <View style={styles.transformLine}>
+                    <View style={[styles.dot, { backgroundColor: fromCat.color }]} />
+                    <Text style={[styles.rowName, { flex: 1 }]} numberOfLines={1}>
+                      {s.fromName || '(unnamed)'}
+                    </Text>
+                    <Text style={styles.compactMeta}>
+                      {fromCat.name} · {s.fromCount}
+                    </Text>
+                  </View>
+                  <View style={styles.transformActionRow}>
+                    <Icon
+                      name={dropped ? 'close-circle-outline' : 'arrow-down'}
+                      size={14}
+                      color={dropped ? theme.colors.danger : theme.colors.textSubtle}
+                    />
+                    <Text
+                      style={[
+                        styles.transformAction,
+                        dropped && { color: theme.colors.danger },
+                      ]}
+                    >
+                      {s.action}
+                    </Text>
+                  </View>
+                  {dropped ? null : (
+                    <View style={styles.transformLine}>
+                      <View style={[styles.dot, { backgroundColor: toCat.color }]} />
+                      <Text
+                        style={[
+                          styles.rowName,
+                          { flex: 1 },
+                          !renamed && { color: theme.colors.textMuted },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {s.toName}
+                      </Text>
+                      <Text style={styles.compactMeta}>{toCat.name}</Text>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        ))}
       </>
     );
   };
@@ -447,6 +770,7 @@ const CategoriseProposalModal = ({
             {tabId === 'local' ? renderLocalTab() : null}
             {tabId === 'sent' ? renderSentTab() : null}
             {tabId === 'received' ? renderReceivedTab() : null}
+            {tabId === 'transform' ? renderTransformTab() : null}
             {tabId !== 'proposed' ? null : (
             <>
             {groups.length === 0 ? (
@@ -454,11 +778,38 @@ const CategoriseProposalModal = ({
                 No groups left. Add at least one below, or cancel.
               </Text>
             ) : null}
+            {history.length ? (
+              <TouchableOpacity
+                style={styles.undoRow}
+                onPress={handleUndo}
+                activeOpacity={0.7}
+              >
+                <Icon name="undo-variant" size={16} color={theme.colors.primary} />
+                <Text style={styles.undoText}>
+                  Undo last change ({history.length})
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            {mergeSourceIdx !== null ? (
+              <View style={styles.mergeBanner}>
+                <Icon name="call-merge" size={16} color={theme.colors.primary} />
+                <Text style={styles.mergeBannerText} numberOfLines={1}>
+                  Merge “{groups[mergeSourceIdx]?.name}” into… pick a group
+                </Text>
+                <TouchableOpacity onPress={() => setMergeSourceIdx(null)} hitSlop={8}>
+                  <Text style={styles.mergeCancelText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
             {(() => {
               // Render groups sectioned by category. Each group keeps its
               // original index in `groups` so the remove button still
               // targets the right entry after sectioning.
               const indexed = groups.map((g, idx) => ({ g, idx }));
+              // Merge needs ≥2 NON-base groups: base groups (declared
+              // workplaces from the questionnaire) are protected — they can be
+              // neither a merge source nor a target.
+              const nonBaseCount = groups.filter((g) => !g.isBase).length;
               const sections = CATEGORIES.map((cat) => ({
                 cat,
                 items: indexed.filter(({ g }) => (g.categoryId || 'unknown') === cat.id),
@@ -478,13 +829,13 @@ const CategoriseProposalModal = ({
                   (acc, { g }) => acc + (g.members?.length || 0),
                   0,
                 );
-                // Skip the section header when there's only one group in
-                // this category — the group name (e.g. "Family", "Helpers")
-                // already conveys the category, and the row's coloured dot
-                // gives the same visual cue. Headers add value only when
-                // they're grouping multiple distinct entries (e.g. several
-                // Office – X groups).
-                const showHeader = items.length > 1;
+                // Always show the colored category header so every category is
+                // clearly delimited. Single-group categories (Family, Helpers)
+                // otherwise rendered as a lone row with no header, bleeding
+                // into the previous section — e.g. a relatives "Family" row
+                // sitting right under the Friends groups looked like it was
+                // categorised as a friend (its gold dot was the only cue).
+                const showHeader = true;
                 return (
                   <View key={cat.id}>
                     {showHeader ? (
@@ -499,24 +850,90 @@ const CategoriseProposalModal = ({
                     ) : null}
                     {items.map(({ g, idx }) => {
                       const count = g.members?.length || 0;
+                      const rowKey = `proposed-${idx}`;
+                      const expanded = expandedGroupId === rowKey;
+                      const isBase = !!g.isBase;
+                      const isMergeSource = mergeSourceIdx === idx;
+                      // Base groups are protected: never a merge target.
+                      const isMergeTarget =
+                        mergeSourceIdx !== null && !isMergeSource && !isBase;
+
+                      // Merge-target mode: the whole row is a button that
+                      // merges the chosen source group into this one.
+                      if (isMergeTarget) {
+                        return (
+                          <TouchableOpacity
+                            key={`${groupSignature(g)}-${idx}`}
+                            style={[styles.row, styles.rowMergeTarget]}
+                            onPress={() => handleMerge(mergeSourceIdx, idx)}
+                            activeOpacity={0.7}
+                          >
+                            <View style={[styles.dot, { backgroundColor: cat.color }]} />
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.rowName} numberOfLines={1}>
+                                {g.name}
+                              </Text>
+                              <Text style={styles.rowMeta}>
+                                {count} {count === 1 ? 'contact' : 'contacts'} · tap to merge here
+                              </Text>
+                            </View>
+                            <Icon name="call-merge" size={18} color={theme.colors.primary} />
+                          </TouchableOpacity>
+                        );
+                      }
+
                       return (
-                        <View key={`${groupSignature(g)}-${idx}`} style={styles.row}>
+                        <View
+                          key={`${groupSignature(g)}-${idx}`}
+                          style={[styles.row, isMergeSource && styles.rowMergeSource]}
+                        >
                           <View style={[styles.dot, { backgroundColor: cat.color }]} />
-                          <View style={{ flex: 1 }}>
+                          <TouchableOpacity
+                            style={{ flex: 1 }}
+                            activeOpacity={0.7}
+                            onPress={() =>
+                              setExpandedGroupId(expanded ? null : rowKey)
+                            }
+                          >
                             <Text style={styles.rowName} numberOfLines={1}>
                               {g.name}
                             </Text>
                             <Text style={styles.rowMeta}>
                               {count} {count === 1 ? 'contact' : 'contacts'}
+                              {isBase ? ' · from your profile' : ''}
+                              {count ? (expanded ? ' · tap to hide' : ' · tap to show') : ''}
                             </Text>
-                          </View>
-                          <TouchableOpacity
-                            style={styles.removeBtn}
-                            onPress={() => handleRemove(idx)}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          >
-                            <Icon name="close" size={18} color={theme.colors.textMuted} />
+                            {expanded && count ? (
+                              <Text style={styles.memberList}>
+                                {memberNamesOf(g).join(', ')}
+                              </Text>
+                            ) : null}
                           </TouchableOpacity>
+                          {/* Action icons only outside merge mode. Base groups
+                              get no merge icon — they can't be merged away. */}
+                          {mergeSourceIdx === null ? (
+                            <>
+                              {!isBase && nonBaseCount > 1 ? (
+                                <TouchableOpacity
+                                  style={styles.rowActionBtn}
+                                  onPress={() => {
+                                    setExpandedGroupId(null);
+                                    setMergeSourceIdx(idx);
+                                  }}
+                                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                >
+                                  <Icon name="call-merge" size={18} color={theme.colors.textMuted} />
+                                </TouchableOpacity>
+                              ) : null}
+                              <TouchableOpacity
+                                style={styles.removeBtn}
+                                onPress={() => handleRemove(idx)}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              >
+                                <Icon name="close" size={18} color={theme.colors.textMuted} />
+                              </TouchableOpacity>
+                            </>
+                          ) : null}
                         </View>
                       );
                     })}
@@ -525,7 +942,7 @@ const CategoriseProposalModal = ({
               });
             })()}
 
-            {!allowNewGroups ? null : addOpen ? (
+            {mergeSourceIdx !== null ? null : !allowNewGroups ? null : addOpen ? (
               <View style={styles.addForm}>
                 <TextInput
                   style={styles.input}
@@ -728,6 +1145,37 @@ const styles = StyleSheet.create({
     color: theme.colors.textSubtle,
     fontWeight: '600',
   },
+  clusterSource: {
+    marginLeft: 'auto',
+    fontSize: theme.font.tiny,
+    color: theme.colors.textMuted,
+    fontStyle: 'italic',
+  },
+  contextBlock: {
+    marginBottom: theme.spacing.md,
+    padding: theme.spacing.sm,
+    backgroundColor: theme.colors.surfaceAlt,
+    borderRadius: theme.radius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  contextRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 3,
+  },
+  contextLabel: {
+    width: 110,
+    fontSize: theme.font.tiny,
+    fontWeight: '700',
+    color: theme.colors.textMuted,
+  },
+  contextValue: {
+    flex: 1,
+    fontSize: theme.font.tiny,
+    color: theme.colors.text,
+    lineHeight: 15,
+  },
   batchBlock: {
     marginBottom: theme.spacing.md,
     paddingBottom: theme.spacing.sm,
@@ -826,14 +1274,85 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     marginTop: 2,
   },
-  cueLine: {
+  transformBlock: {
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.sm,
+    backgroundColor: theme.colors.surfaceAlt,
+    borderRadius: theme.radius.sm,
+    marginBottom: theme.spacing.xs,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  transformLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  transformActionRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 3,
+    paddingLeft: 1,
+  },
+  transformAction: {
+    flex: 1,
+    marginLeft: 6,
     fontSize: theme.font.tiny,
-    color: theme.colors.textSubtle,
+    color: theme.colors.textMuted,
     fontStyle: 'italic',
-    marginTop: 2,
+    lineHeight: 15,
   },
   removeBtn: {
     padding: 4,
+  },
+  rowActionBtn: {
+    padding: 4,
+    marginRight: 2,
+  },
+  rowMergeSource: {
+    borderColor: theme.colors.primary,
+    borderStyle: 'dashed',
+  },
+  rowMergeTarget: {
+    borderColor: theme.colors.primary,
+  },
+  mergeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.sm,
+    backgroundColor: theme.colors.surfaceAlt,
+    borderRadius: theme.radius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+    marginBottom: theme.spacing.xs,
+  },
+  mergeBannerText: {
+    flex: 1,
+    marginLeft: 6,
+    fontSize: theme.font.tiny,
+    color: theme.colors.text,
+  },
+  mergeCancelText: {
+    fontSize: theme.font.tiny,
+    fontWeight: '600',
+    color: theme.colors.primary,
+  },
+  undoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: theme.spacing.sm,
+    marginBottom: theme.spacing.xs,
+    borderRadius: theme.radius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderStyle: 'dashed',
+  },
+  undoText: {
+    marginLeft: 6,
+    fontSize: theme.font.tiny,
+    fontWeight: '600',
+    color: theme.colors.primary,
   },
   emptyText: {
     fontSize: theme.font.small,
@@ -875,6 +1394,23 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     borderWidth: 1,
     borderColor: theme.colors.border,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingHorizontal: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.xs,
+    fontSize: theme.font.body,
+    color: theme.colors.text,
   },
   categoryRow: {
     flexDirection: 'row',

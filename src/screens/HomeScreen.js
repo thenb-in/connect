@@ -22,7 +22,7 @@ import EmptyState from '../components/EmptyState';
 import GroupPill from '../components/GroupPill';
 import ConnectSetupGate from '../components/ConnectSetupGate';
 import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
-import { getLastAnalyzedAt, recordReconnect } from '../storage';
+import { getLastAnalyzedAt, recordReconnect, CATEGORIES } from '../storage';
 import { formatTimestamp } from '../utils/dateUtils';
 import { shareApp } from '../utils/appShare';
 
@@ -103,6 +103,14 @@ const HomeScreen = ({ navigation }) => {
       const group = pick.groups?.find((g) => g.id === groupId);
       out.push({ profile: pick, group });
     });
+    // Order by category (friends, then family/relatives, then office/colleagues,
+    // ...) so this lane matches the "Important groups" ordering.
+    const categoryOrder = new Map(CATEGORIES.map((c, i) => [c.id, i]));
+    const rank = ({ group }) =>
+      categoryOrder.has(group?.categoryId)
+        ? categoryOrder.get(group.categoryId)
+        : CATEGORIES.length;
+    out.sort((a, b) => rank(a) - rank(b));
     return out.slice(0, 10);
   }, [analysis, hasCallLogSignal]);
 
@@ -387,7 +395,15 @@ const getGroupCounts = (analysis) => {
       if (!seen.has(g.id)) seen.set(g.id, g);
     });
   });
-  return [...seen.values()].map((g) => ({ ...g, count: counts.get(g.id) || 0 }));
+  // Order groups by their category (friends, then family/relatives, then
+  // office/colleagues, ...) using the canonical CATEGORIES order. Within a
+  // category, insertion order is preserved by JS's stable sort.
+  const categoryOrder = new Map(CATEGORIES.map((c, i) => [c.id, i]));
+  const rank = (g) =>
+    categoryOrder.has(g.categoryId) ? categoryOrder.get(g.categoryId) : CATEGORIES.length;
+  return [...seen.values()]
+    .sort((a, b) => rank(a) - rank(b))
+    .map((g) => ({ ...g, count: counts.get(g.id) || 0 }));
 };
 
 const styles = StyleSheet.create({
