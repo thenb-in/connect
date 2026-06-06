@@ -83,6 +83,11 @@ const DELETE_SCOPES = [
     description: 'Soft goals like "reconnect with 5 people this week".',
   },
   {
+    id: 'milestones',
+    title: 'Milestones',
+    description: 'Earned achievements like reconnect counts and day streaks.',
+  },
+  {
     id: 'userProfile',
     title: 'Your context',
     description:

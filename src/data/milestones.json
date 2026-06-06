@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "source": "bundled",
+  "milestones": [
+    {
+      "id": "people-1",
+      "type": "people",
+      "title": "First hello",
+      "description": "Reconnect with your first person",
+      "target": 1,
+      "icon": "account-check-outline"
+    },
+    {
+      "id": "people-5",
+      "type": "people",
+      "title": "Warming up",
+      "description": "Reconnect with 5 people",
+      "target": 5,
+      "icon": "account-multiple-check-outline"
+    },
+    {
+      "id": "people-25",
+      "type": "people",
+      "title": "Reaching out",
+      "description": "Reconnect with 25 people",
+      "target": 25,
+      "icon": "account-group-outline"
+    },
+    {
+      "id": "people-100",
+      "type": "people",
+      "title": "Connector",
+      "description": "Reconnect with 100 people",
+      "target": 100,
+      "icon": "account-heart-outline"
+    },
+    {
+      "id": "streak-3",
+      "type": "streak",
+      "title": "Three in a row",
+      "description": "Reach out three days in a row",
+      "target": 3,
+      "icon": "fire"
+    },
+    {
+      "id": "streak-7",
+      "type": "streak",
+      "title": "A steady week",
+      "description": "Reach out seven days in a row",
+      "target": 7,
+      "icon": "calendar-week"
+    },
+    {
+      "id": "streak-30",
+      "type": "streak",
+      "title": "A month of warmth",
+      "description": "Reach out thirty days in a row",
+      "target": 30,
+      "icon": "calendar-heart"
+    }
+  ]
+}

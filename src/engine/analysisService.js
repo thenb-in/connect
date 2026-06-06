@@ -11,6 +11,7 @@ import {
   getGroups,
   getDontSuggestMap,
   recordReconnect,
+  setPermsState,
 } from '../storage';
 import { analyzeRelationships } from './relationshipEngine';
 import { loadPhoneBookContacts, ensureContactsPermission } from '../utils/phoneBook';
@@ -186,8 +187,13 @@ export const analyzeFromCache = () =>
   });
 
 /**
- * Convenience wrapper used by the onboarding flow. Asks for both permissions
- * sequentially and reports back what was granted so the UI can adapt.
+ * Convenience wrapper used by the onboarding flow. Asks for contacts (iOS +
+ * Android) and, on Android only, the call log permission, then persists the
+ * resolved permission state to MMKV so every entry point — not just
+ * onboarding — leaves a consistent record behind. iOS has no public call-log
+ * API, so its `callLog` is reported (and stored) as 'unsupported'.
+ *
+ * @returns {Promise<{contacts:Object, callLog:Object, perms:Object}>}
  */
 export const requestImportPermissions = async () => {
   const contactsResult = await ensureContactsPermission();
@@ -200,5 +206,22 @@ export const requestImportPermissions = async () => {
       callLogResult = { granted: false, supported: true, error: err?.message };
     }
   }
-  return { contacts: contactsResult, callLog: callLogResult };
+
+  // Normalised, persisted shape the UI and gates read back from MMKV.
+  const perms = {
+    contacts: contactsResult.granted
+      ? 'granted'
+      : contactsResult.blocked
+      ? 'blocked'
+      : 'denied',
+    callLog:
+      Platform.OS !== 'android'
+        ? 'unsupported'
+        : callLogResult.granted
+        ? 'granted'
+        : 'denied',
+  };
+  setPermsState(perms);
+
+  return { contacts: contactsResult, callLog: callLogResult, perms };
 };

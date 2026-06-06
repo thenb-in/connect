@@ -23,7 +23,6 @@ import {
 import {
   setOnboarded,
   setSetupCompleted,
-  setPermsState,
   getPermsState,
   getLlmConfig,
   hasLlmKey,
@@ -157,18 +156,10 @@ const OnboardingScreen = ({ navigation, onFinished, onLogin, onExitConnect }) =>
   const handleAllow = async () => {
     setLoading(true);
     try {
+      // requestImportPermissions now normalises and persists the perms shape
+      // to MMKV itself, so we just mirror the result into local state.
       const result = await requestImportPermissions();
-      const next = {
-        contacts: result.contacts.granted ? 'granted' : 'denied',
-        callLog:
-          Platform.OS !== 'android'
-            ? 'unsupported'
-            : result.callLog.granted
-            ? 'granted'
-            : 'denied',
-      };
-      setPerms(next);
-      setPermsState(next);
+      setPerms(result.perms);
     } finally {
       setLoading(false);
     }
