@@ -31,7 +31,7 @@ const App = () => (
     <PaperProvider theme={paperTheme}>
       <NavigationContainer>
         <SafeAreaView edges={[]} style={{ flex: 1, backgroundColor: theme.colors.background }}>
-          <ConnectStack mode="guest" />
+          <ConnectStack />
           <ToastOverlay />
         </SafeAreaView>
       </NavigationContainer>

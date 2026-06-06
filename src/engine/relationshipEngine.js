@@ -30,11 +30,21 @@ export const DEFAULTS = Object.freeze({
   strongPeakPerMonth: 4,
   // Dormancy: no contact for at least N days.
   dormantAfterDays: 90,
+  // Reconnect recommendations only surface a contact once it has been at least
+  // this long since the last call (3 months) — or if you have never called
+  // them at all. Keeps the suggestion lanes from nudging you about people you
+  // already spoke to recently.
+  reconnectMinDays: 90,
   // "Recently reconnected" window: last interaction within N days following a
   // long prior gap.
   recentReconnectWithinDays: 21,
   recentReconnectPriorGapDays: 90,
 });
+
+// How many of a contact's most recent calls we keep on the profile for the
+// detail screen's "Recent calls" list. The full slim log still lives in MMKV;
+// this is just the rendered tail so the profile payload stays small.
+const RECENT_CALLS_CAP = 25;
 
 const safeNumber = (value) => {
   const n = typeof value === 'number' ? value : parseInt(value, 10);
@@ -152,6 +162,17 @@ export const summarizeInteractions = (logs, now, cfg) => {
   const daysSinceLast = last ? Math.floor((now - last) / DAY_MS) : null;
   const spanDays = first && last ? Math.max(1, Math.floor((last - first) / DAY_MS)) : 0;
 
+  // Slim, newest-first tail of individual calls so the UI can render a per
+  // contact call history (date/time, type, duration). `sorted` is already
+  // ordered newest-first, so we just project and cap it.
+  const recentCalls = sorted
+    .slice(0, RECENT_CALLS_CAP)
+    .map(({ log, ts, type }) => ({
+      ts,
+      type,
+      durationSec: getLogDuration(log),
+    }));
+
   return {
     total,
     outgoing,
@@ -167,7 +188,22 @@ export const summarizeInteractions = (logs, now, cfg) => {
     daysSinceLast,
     spanDays,
     peakPerMonth,
+    recentCalls,
   };
+};
+
+/**
+ * Whether a contact is eligible to appear in a reconnect recommendation.
+ * Recommendations only nudge you about people you have either:
+ *   - never called (no interactions at all), or
+ *   - not called in at least `cfg.reconnectMinDays` (default 3 months).
+ * Anyone you spoke to more recently than that is deliberately held back so the
+ * suggestion lanes stay focused on relationships that have actually gone quiet.
+ */
+export const isReconnectEligible = (summary, cfg = DEFAULTS) => {
+  if (!summary || summary.total === 0) return true;
+  if (summary.daysSinceLast === null) return true;
+  return summary.daysSinceLast >= cfg.reconnectMinDays;
 };
 
 /**
@@ -345,11 +381,14 @@ export const analyzeRelationships = ({
   const isSuppressed = (p) => Boolean(p?.remindersSuppressed);
 
   // Reconnect Today: top of the priority queue, excluding never-connected and
-  // recently-reconnected/active.
+  // recently-reconnected/active. The `isReconnectEligible` gate enforces the
+  // "only suggest people you last spoke to over 3 months ago" rule, so anyone
+  // contacted more recently never lands here regardless of their score.
   const reconnectToday = profiles
     .filter(
       (p) =>
         p.summary.total > 0 &&
+        isReconnectEligible(p.summary, cfg) &&
         !p.labels.includes('recently_reconnected') &&
         !p.labels.includes('consistent') &&
         p.priority > 0 &&

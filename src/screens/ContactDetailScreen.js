@@ -29,6 +29,19 @@ import {
 import { reasonForProfile } from '../components/ReconnectCard';
 import { makeImmediateCall } from '../utils/makeImmediateCall';
 import { sendWhatsAppMessage } from '../utils/appShare';
+import { formatShortDateTime, formatDuration } from '../utils/dateUtils';
+
+// Per call-type presentation for the "Recent calls" list. Missed and rejected
+// calls never connect, so they show a status word instead of a duration.
+const CALL_TYPE_META = {
+  outgoing: { icon: 'phone-outgoing', color: theme.colors.primary, label: 'Outgoing' },
+  incoming: { icon: 'phone-incoming', color: theme.colors.success, label: 'Incoming' },
+  missed: { icon: 'phone-missed', color: theme.colors.accent, label: 'Missed' },
+  rejected: { icon: 'phone-cancel', color: theme.colors.accent, label: 'Rejected' },
+  other: { icon: 'phone', color: theme.colors.textMuted, label: 'Call' },
+};
+
+const callTypeMeta = (type) => CALL_TYPE_META[type] || CALL_TYPE_META.other;
 
 // Label-to-status mapping, in priority order. The first label found on a
 // profile wins so a "lost_connection" never gets shadowed by a weaker
@@ -228,6 +241,42 @@ const ContactDetailScreen = ({ navigation, route }) => {
           <Meta label="Peak / month" value={summary.peakPerMonth} />
         </View>
 
+        {summary.recentCalls && summary.recentCalls.length > 0 ? (
+          <>
+            <Text style={styles.sectionTitle}>Recent calls</Text>
+            <Text style={styles.sectionCaption}>
+              Number, date &amp; time, and how long each call lasted.
+            </Text>
+            <View style={styles.callsCard}>
+              {summary.recentCalls.map((call, idx) => {
+                const meta = callTypeMeta(call.type);
+                const connected =
+                  call.type !== 'missed' && call.type !== 'rejected';
+                return (
+                  <View
+                    key={`${call.ts}_${idx}`}
+                    style={[
+                      styles.callRow,
+                      idx > 0 && styles.callRowBordered,
+                    ]}
+                  >
+                    <Icon name={meta.icon} size={18} color={meta.color} />
+                    <View style={styles.callBody}>
+                      <Text style={styles.callType}>{meta.label}</Text>
+                      <Text style={styles.callWhen}>
+                        {formatShortDateTime(call.ts) || '—'}
+                      </Text>
+                    </View>
+                    <Text style={styles.callDuration}>
+                      {connected ? formatDuration(call.durationSec) : meta.label}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          </>
+        ) : null}
+
         <Text style={styles.sectionTitle}>Groups</Text>
         <Text style={styles.sectionCaption}>
           Tap to add or remove this person. Groups live inside a category — a person can be in multiple.
@@ -394,6 +443,44 @@ const styles = StyleSheet.create({
     fontSize: theme.font.h3,
     fontWeight: '700',
     color: theme.colors.text,
+  },
+  callsCard: {
+    marginHorizontal: theme.spacing.lg,
+    marginTop: theme.spacing.md,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingHorizontal: theme.spacing.md,
+  },
+  callRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: theme.spacing.sm,
+  },
+  callRowBordered: {
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+  },
+  callBody: {
+    flex: 1,
+    marginLeft: theme.spacing.md,
+  },
+  callType: {
+    fontSize: theme.font.small,
+    fontWeight: '600',
+    color: theme.colors.text,
+  },
+  callWhen: {
+    fontSize: theme.font.tiny,
+    color: theme.colors.textMuted,
+    marginTop: 1,
+  },
+  callDuration: {
+    fontSize: theme.font.small,
+    fontWeight: '600',
+    color: theme.colors.textMuted,
+    marginLeft: theme.spacing.sm,
   },
   sectionCaption: {
     marginHorizontal: theme.spacing.lg,

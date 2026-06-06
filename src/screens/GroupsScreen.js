@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useFocusEffect } from '@react-navigation/native';
 import theme from '../theme';
 import AppHeader from '../components/AppHeader';
 import EmptyState from '../components/EmptyState';
@@ -67,6 +68,17 @@ const GroupsScreen = ({ navigation, route }) => {
     counts[UNKNOWN_GROUP_ID] = getUnknownGroupCount();
     return counts;
   }, [bump]);
+
+  // Member counts (and the group list itself) are derived from MMKV and only
+  // recomputed when `bump` changes. Tagging a contact into a group happens on
+  // the contact detail screen, which writes to MMKV without touching `bump`
+  // here — so re-read on focus, otherwise the counts stay stale (e.g. 0) after
+  // returning to this tab.
+  useFocusEffect(
+    useCallback(() => {
+      setBump((b) => b + 1);
+    }, []),
+  );
 
   const [newOpen, setNewOpen] = useState(false);
   const [name, setName] = useState('');

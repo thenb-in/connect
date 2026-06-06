@@ -20,8 +20,10 @@ import ReconnectCard from '../components/ReconnectCard';
 import SectionHeader from '../components/SectionHeader';
 import EmptyState from '../components/EmptyState';
 import GroupPill from '../components/GroupPill';
+import MilestonesCard from '../components/MilestonesCard';
 import ConnectSetupGate from '../components/ConnectSetupGate';
 import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
+import { useMilestones } from '../hooks/useMilestones';
 import { getLastAnalyzedAt, recordReconnect, CATEGORIES } from '../storage';
 import { formatTimestamp } from '../utils/dateUtils';
 import { shareApp } from '../utils/appShare';
@@ -40,6 +42,9 @@ import { shareApp } from '../utils/appShare';
  */
 const HomeScreen = ({ navigation }) => {
   const { analysis, refreshing, refresh, syncOnFocus } = useConnectAnalysis();
+  // Recompute milestone progress whenever the analysis regenerates, since
+  // reconnects are recorded as a side effect of a refresh/focus sync.
+  const { milestones } = useMilestones(analysis?.generatedAt);
   const [overflowOpen, setOverflowOpen] = useState(false);
 
   // Whenever the home tab regains focus, pull the call-log delta since the
@@ -181,6 +186,16 @@ const HomeScreen = ({ navigation }) => {
             value={analysis?.counts?.recentlyReconnected ?? 0}
           />
         </View>
+
+        {milestones.length > 0 ? (
+          <>
+            <SectionHeader
+              title="Milestones"
+              caption="Small wins as you keep your circle warm"
+            />
+            <MilestonesCard milestones={milestones} />
+          </>
+        ) : null}
 
         {!hasCallLogSignal && randomPerGroup.length > 0 ? (
           <>
@@ -409,9 +424,10 @@ const getGroupCounts = (analysis) => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   lastSynced: {
-    color: theme.colors.success,
+    color: theme.colors.primary,
     fontSize: theme.font.tiny,
     fontWeight: '600',
+    fontStyle: 'italic',
     textAlign: 'center',
     paddingTop: theme.spacing.sm,
   },

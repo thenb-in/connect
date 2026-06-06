@@ -23,7 +23,6 @@ import {
 import {
   setOnboarded,
   setSetupCompleted,
-  setPermsState,
   getPermsState,
   getLlmConfig,
   hasLlmKey,
@@ -115,7 +114,7 @@ const Step = ({ index, icon, title, body, state, scale }) => {
  *
  * The LLM step is skippable — the user can come back to it from Settings.
  */
-const OnboardingScreen = ({ navigation, onFinished, onLogin, onExitConnect }) => {
+const OnboardingScreen = ({ navigation, onFinished }) => {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const scale = Math.min(Math.max(height / 780, 0.85), 1.15);
@@ -157,18 +156,10 @@ const OnboardingScreen = ({ navigation, onFinished, onLogin, onExitConnect }) =>
   const handleAllow = async () => {
     setLoading(true);
     try {
+      // requestImportPermissions now normalises and persists the perms shape
+      // to MMKV itself, so we just mirror the result into local state.
       const result = await requestImportPermissions();
-      const next = {
-        contacts: result.contacts.granted ? 'granted' : 'denied',
-        callLog:
-          Platform.OS !== 'android'
-            ? 'unsupported'
-            : result.callLog.granted
-            ? 'granted'
-            : 'denied',
-      };
-      setPerms(next);
-      setPermsState(next);
+      setPerms(result.perms);
     } finally {
       setLoading(false);
     }
@@ -596,27 +587,6 @@ const OnboardingScreen = ({ navigation, onFinished, onLogin, onExitConnect }) =>
               <Text style={styles.primaryBtnText}>Enter Connect</Text>
             </TouchableOpacity>
           )}
-
-          <TouchableOpacity
-            onPress={() => {
-              if (done) {
-                handleEnter();
-                return;
-              }
-              setOnboarded(true);
-              if (onLogin) {
-                onLogin();
-              } else if (onExitConnect) {
-                onExitConnect();
-              } else {
-                handleEnter();
-              }
-            }}
-          >
-            <Text style={styles.skipText}>
-              {done ? 'Done' : 'I will set this up later'}
-            </Text>
-          </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
@@ -817,11 +787,6 @@ const styles = StyleSheet.create({
     color: theme.colors.surface,
     fontWeight: '700',
     fontSize: theme.font.body,
-  },
-  skipText: {
-    marginTop: theme.spacing.md,
-    color: theme.colors.textMuted,
-    fontSize: theme.font.small,
   },
 });
 

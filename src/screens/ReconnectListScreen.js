@@ -1,17 +1,11 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import {
-  View,
-  StyleSheet,
-  FlatList,
-  RefreshControl,
-  TextInput,
-} from 'react-native';
+import { View, StyleSheet, FlatList, RefreshControl } from 'react-native';
 import { makeImmediateCall } from '../utils/makeImmediateCall';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import AppHeader from '../components/AppHeader';
 import ReconnectCard from '../components/ReconnectCard';
 import EmptyState from '../components/EmptyState';
+import ContactSearchBar from '../components/ContactSearchBar';
 import ConnectSetupGate from '../components/ConnectSetupGate';
 import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
 import { recordReconnect } from '../storage';
@@ -74,16 +68,12 @@ const ReconnectListScreen = ({ navigation, route }) => {
   const laneKey = route?.params?.lane || 'reconnect';
   const lane = LANES[laneKey] || LANES.reconnect;
   const { analysis, refreshing, refresh } = useConnectAnalysis();
-  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
 
-  const data = useMemo(() => {
-    const list = analysis?.[lane.key] || [];
-    const q = query.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((p) =>
-      (p.contact.name || '').toLowerCase().includes(q),
-    );
-  }, [analysis, lane.key, query]);
+  const list = useMemo(
+    () => analysis?.[lane.key] || [],
+    [analysis, lane.key],
+  );
 
   const onCardPress = useCallback(
     (profile) =>
@@ -108,18 +98,13 @@ const ReconnectListScreen = ({ navigation, route }) => {
         onBack={() => navigation.goBack()}
       />
       <ConnectSetupGate>
-      <View style={styles.searchWrap}>
-        <Icon name="magnify" size={18} color={theme.colors.textSubtle} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search by name"
-          placeholderTextColor={theme.colors.textSubtle}
-          value={query}
-          onChangeText={setQuery}
-        />
-      </View>
+      <ContactSearchBar
+        data={list}
+        onResults={setResults}
+        placeholder="Search by name"
+      />
       <FlatList
-        data={data}
+        data={results}
         keyExtractor={(p) => p.contact.normalized || p.contact.key}
         renderItem={({ item }) => (
           <ReconnectCard
@@ -151,24 +136,6 @@ const ReconnectListScreen = ({ navigation, route }) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
-  searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.pill,
-    marginHorizontal: theme.spacing.lg,
-    marginTop: theme.spacing.md,
-    paddingHorizontal: theme.spacing.md,
-  },
-  searchInput: {
-    flex: 1,
-    paddingVertical: theme.spacing.sm,
-    paddingLeft: theme.spacing.sm,
-    fontSize: theme.font.body,
-    color: theme.colors.text,
-  },
 });
 
 export default ReconnectListScreen;

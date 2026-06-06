@@ -1,6 +1,7 @@
 import { storage } from './mmkv';
 import { normalizeLast10 } from './utils/phone';
 import { readJson, writeJson } from './utils/syncStoreMmkv';
+import bundledMilestones from './data/milestones.json';
 
 // All Connect Mode local state lives behind the `connect.*` namespace so it
 // never collides with CRM Mode keys. Connect Mode is local-first: nothing
@@ -13,6 +14,13 @@ const K = {
   LAST_ANALYZED_AT: 'connect.lastAnalyzedAt',
   GROUPS: 'connect.groups',
   CONTACT_GROUPS: 'connect.contactGroups',
+  // Milestone definitions (achievements like "connect with 25 people" or a
+  // "7-day streak"). These ship bundled in src/data/milestones.json and can
+  // later be overwritten by a webserver payload via setMilestoneDefinitions.
+  // MILESTONES_STATE tracks which ones the user has earned, keyed by id ->
+  // achievedAt timestamp, so an earned badge survives a streak later lapsing.
+  MILESTONE_DEFS: 'connect.milestoneDefs',
+  MILESTONES_STATE: 'connect.milestonesState',
   // Phones (normalised, last-10) whose group memberships the user has
   // edited by hand. The categoriser skips these on re-runs so manual
   // corrections never get overwritten by the LLM.
@@ -372,6 +380,45 @@ export const recordReconnect = (phone, ts = Date.now()) => {
   return true;
 };
 
+// ---------- Milestones ----------
+// Definitions are data: bundled defaults today, a webserver payload later.
+// `getMilestoneDefinitions` returns the server-synced copy when present, else
+// the bundled JSON, so the rest of the app reads from one place regardless of
+// where the list came from. State is the per-id achievedAt map.
+
+export const getMilestoneDefinitions = () => {
+  const synced = readJson(K.MILESTONE_DEFS, null);
+  if (synced && (Array.isArray(synced) ? synced.length : synced.milestones?.length)) {
+    return synced;
+  }
+  return bundledMilestones;
+};
+
+// Persist a webserver-fetched milestone payload. Pass null to drop back to the
+// bundled defaults. The shape is whatever the server sends — the engine
+// normalises it before use, so this stays a dumb cache.
+export const setMilestoneDefinitions = (defs) => {
+  if (!defs) {
+    storage.delete(K.MILESTONE_DEFS);
+    return;
+  }
+  writeJson(K.MILESTONE_DEFS, defs);
+};
+
+export const getMilestonesState = () => readJson(K.MILESTONES_STATE, {});
+
+// Records that a milestone was earned, stamping the first time we saw it as
+// achieved. Never overwrites an existing timestamp, so the original earn date
+// is preserved. Returns true when it actually recorded something new.
+export const markMilestoneAchieved = (id, ts = Date.now()) => {
+  if (!id) return false;
+  const map = getMilestonesState();
+  if (map[id]) return false;
+  map[id] = Number(ts) || Date.now();
+  writeJson(K.MILESTONES_STATE, map);
+  return true;
+};
+
 // ---------- Don't suggest ----------
 // Per-contact opt-out for the suggestion engine. Stored as
 // `{ [normalizedPhone]: true }`. Contacts in the map are filtered out of every
@@ -703,6 +750,7 @@ const SCOPE_KEYS = {
   notes: [K.NOTES],
   reconnects: [K.RECONNECTS],
   goals: [K.GOALS],
+  milestones: [K.MILESTONE_DEFS, K.MILESTONES_STATE],
   userProfile: [K.USER_PROFILE],
 };
 

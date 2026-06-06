@@ -83,6 +83,11 @@ const DELETE_SCOPES = [
     description: 'Soft goals like "reconnect with 5 people this week".',
   },
   {
+    id: 'milestones',
+    title: 'Milestones',
+    description: 'Earned achievements like reconnect counts and day streaks.',
+  },
+  {
     id: 'userProfile',
     title: 'Your context',
     description:
@@ -107,7 +112,7 @@ const defaultSelectedScopes = () =>
 
 const providerLabel = (p) => LLM_PROVIDER_META[p]?.label || p;
 
-const SettingsScreen = ({ navigation, mode = 'guest', user, onLogin, onLogout }) => {
+const SettingsScreen = ({ navigation }) => {
   const [step, setStep] = useState(null);
   const [llmOpen, setLlmOpen] = useState(false);
   // 'export' | 'import' | null. Re-mounting the modal each time it opens
@@ -128,8 +133,6 @@ const SettingsScreen = ({ navigation, mode = 'guest', user, onLogin, onLogout })
   const llmKeysSnapshot = useMemo(() => getLlmKeys(), [llmBump]);
   const userProfileSnapshot = useMemo(() => getUserProfile(), [contextBump]);
   const userProfileCount = userProfileEntryCount(userProfileSnapshot);
-
-  const isAuthed = mode !== 'guest' && Boolean(user);
 
   const openFlow = () => {
     setSelectedScopes(defaultSelectedScopes());
@@ -248,58 +251,6 @@ const SettingsScreen = ({ navigation, mode = 'guest', user, onLogin, onLogout })
     <View style={styles.container}>
       <AppHeader title="Settings" />
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.sectionLabel}>Account</Text>
-
-        <View style={styles.card}>
-          {isAuthed ? (
-            <TouchableOpacity
-              style={styles.row}
-              onPress={onLogout}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-                <Icon
-                  name="account-circle-outline"
-                  size={20}
-                  color={theme.colors.primary}
-                />
-              </View>
-              <View style={styles.rowBody}>
-                <Text style={styles.rowTitle}>
-                  {user?.email || user?.name || 'Signed in'}
-                </Text>
-                <Text style={styles.rowSubtitle}>Tap to log out.</Text>
-              </View>
-              <Icon
-                name="logout"
-                size={20}
-                color={theme.colors.textSubtle}
-              />
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={styles.row}
-              onPress={onLogin}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-                <Icon name="login" size={20} color={theme.colors.primary} />
-              </View>
-              <View style={styles.rowBody}>
-                <Text style={styles.rowTitle}>Login</Text>
-                <Text style={styles.rowSubtitle}>
-                  Sign in to switch to CRM mode and sync across devices.
-                </Text>
-              </View>
-              <Icon
-                name="chevron-right"
-                size={22}
-                color={theme.colors.textSubtle}
-              />
-            </TouchableOpacity>
-          )}
-        </View>
-
         <Text style={styles.sectionLabel}>AI categorisation</Text>
 
         <View style={styles.card}>
@@ -648,6 +599,30 @@ const SettingsScreen = ({ navigation, mode = 'guest', user, onLogin, onLogout })
               </Text>
             </View>
           </View>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => navigation.navigate('ConnectCallLogs')}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+              <Icon name="phone-log" size={20} color={theme.colors.primary} />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>View saved call logs</Text>
+              <Text style={styles.rowSubtitle}>
+                See the call history Connect has stored on this device —
+                number, date &amp; time, and duration of each call.
+              </Text>
+            </View>
+            <Icon
+              name="chevron-right"
+              size={22}
+              color={theme.colors.textSubtle}
+            />
+          </TouchableOpacity>
 
           <View style={styles.divider} />
 
