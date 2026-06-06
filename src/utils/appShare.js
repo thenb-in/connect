@@ -7,7 +7,11 @@ export const COMPANY_NAME = 'Navlakha Technologies';
 export const APP_WEBSITE_URL = 'https://navlakha.tech/connect';
 export const PRIVACY_POLICY_URL = 'https://navlakha.tech/privacy';
 export const CONTACT_EMAIL = 'support@navlakha.tech';
-export const FOUNDER_CREDITS = 'Built with ❤️ by Navlakha Technologies';
+// React Native <Text> can't render HTML, so the credits are split into a
+// plain prefix and a tappable name that links to FOUNDER_URL (wired up in the
+// Settings footer).
+export const FOUNDER_CREDITS = 'Built with ❤️ by';
+export const FOUNDER_URL = 'https://navlakha.tech';
 export const WHATSAPP_SUPPORT_NUMBER = '+918275269688';
 
 const PLAY_STORE_URL = `https://play.google.com/store/apps/details?id=${ANDROID_PACKAGE}`;

@@ -6,7 +6,6 @@ import {
   StyleSheet,
   RefreshControl,
   Platform,
-  FlatList,
   ToastAndroid,
   TouchableOpacity,
   Modal,
@@ -19,7 +18,6 @@ import { makeImmediateCall } from '../utils/makeImmediateCall';
 import ReconnectCard from '../components/ReconnectCard';
 import SectionHeader from '../components/SectionHeader';
 import EmptyState from '../components/EmptyState';
-import GroupPill from '../components/GroupPill';
 import MilestonesCard from '../components/MilestonesCard';
 import ConnectSetupGate from '../components/ConnectSetupGate';
 import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
@@ -27,6 +25,7 @@ import { useMilestones } from '../hooks/useMilestones';
 import { getLastAnalyzedAt, recordReconnect, CATEGORIES } from '../storage';
 import { formatTimestamp } from '../utils/dateUtils';
 import { shareApp } from '../utils/appShare';
+import AboutModal from '../components/AboutModal';
 
 /**
  * The Connect Mode home dashboard. Built to feel like a "morning reflection"
@@ -36,7 +35,6 @@ import { shareApp } from '../utils/appShare';
  * The lanes correspond directly to the buckets the engine produces:
  *   - Reconnect Today
  *   - Lost Connections
- *   - Important Groups
  *   - Recently Reconnected
  *   - Missed Calls to Return
  */
@@ -46,6 +44,7 @@ const HomeScreen = ({ navigation }) => {
   // reconnects are recorded as a side effect of a refresh/focus sync.
   const { milestones } = useMilestones(analysis?.generatedAt);
   const [overflowOpen, setOverflowOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   // Whenever the home tab regains focus, pull the call-log delta since the
   // last sync (no contacts re-import, no spinner). This is what gives the
@@ -70,10 +69,6 @@ const HomeScreen = ({ navigation }) => {
     }
     ToastAndroid.show('Synced', ToastAndroid.SHORT);
   }, [refresh]);
-
-  const groupsWithCounts = useMemo(() => {
-    return (analysis?.profiles ? getGroupCounts(analysis) : []).slice(0, 10);
-  }, [analysis]);
 
   // When the user has no call logs (iOS / Android with logs denied / no logs
   // imported yet) the engine has nothing to score against, so the Reconnect
@@ -245,70 +240,40 @@ const HomeScreen = ({ navigation }) => {
           ))
         )}
 
-        <SectionHeader
-          title="Lost connections"
-          caption="Strong past communication, quiet for a while"
-          actionLabel={
-            (analysis?.lostConnections || []).length > 5 ? 'See all' : null
-          }
-          onActionPress={() => navigation.navigate('ConnectLost')}
-        />
-        {(analysis?.lostConnections || []).length === 0 ? (
-          <EmptyState
-            icon="account-clock-outline"
-            title="No lost connections yet"
-            body="Your historically strong relationships are still warm."
-            compact
-          />
-        ) : (
-          (analysis?.lostConnections || []).slice(0, 4).map((p) => (
-            <ReconnectCard
-              key={p.contact.normalized}
-              profile={p}
-              compact
-              onPress={() => onCardPress(p)}
-              onCall={() => onCall(p)}
+        {/* On iOS there is no call history to derive lost connections from, so an
+            empty "Lost connections" lane is just noise — hide the whole section
+            unless we actually have cards to show. Android keeps the soft empty
+            state since its call log can legitimately produce zero results. */}
+        {Platform.OS !== 'android' && (analysis?.lostConnections || []).length === 0 ? null : (
+          <>
+            <SectionHeader
+              title="Lost connections"
+              caption="Strong past communication, quiet for a while"
+              actionLabel={
+                (analysis?.lostConnections || []).length > 5 ? 'See all' : null
+              }
+              onActionPress={() => navigation.navigate('ConnectLost')}
             />
-          ))
-        )}
-
-        <SectionHeader
-          title="Important groups"
-          caption="Tap a group to see who you should keep close"
-          actionLabel="Manage"
-          onActionPress={() => navigation.navigate('ConnectGroups')}
-        />
-        <View style={styles.groupRow}>
-          {groupsWithCounts.length === 0 ? (
-            <EmptyState
-              icon="folder-account-outline"
-              title="No groups yet"
-              body="Create groups like Family, Mentors, Investors to organise relationships."
-              actionLabel="Create a group"
-              onActionPress={() => navigation.navigate('ConnectGroups')}
-              compact
-            />
-          ) : (
-            <FlatList
-              horizontal
-              data={groupsWithCounts}
-              keyExtractor={(g) => g.id}
-              renderItem={({ item }) => (
-                <GroupPill
-                  group={item}
-                  count={item.count}
-                  onPress={() =>
-                    navigation.navigate('ConnectGroupDetail', {
-                      groupId: item.id,
-                    })
-                  }
+            {(analysis?.lostConnections || []).length === 0 ? (
+              <EmptyState
+                icon="account-clock-outline"
+                title="No lost connections yet"
+                body="Your historically strong relationships are still warm."
+                compact
+              />
+            ) : (
+              (analysis?.lostConnections || []).slice(0, 4).map((p) => (
+                <ReconnectCard
+                  key={p.contact.normalized}
+                  profile={p}
+                  compact
+                  onPress={() => onCardPress(p)}
+                  onCall={() => onCall(p)}
                 />
-              )}
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingHorizontal: theme.spacing.lg }}
-            />
-          )}
-        </View>
+              ))
+            )}
+          </>
+        )}
 
         {(analysis?.recentlyReconnected || []).length > 0 ? (
           <>
@@ -363,8 +328,14 @@ const HomeScreen = ({ navigation }) => {
             <TouchableOpacity
               style={styles.overflowRow}
               onPress={() => {
+                // Close the overflow menu first, then open the native share
+                // sheet once the Modal has finished dismissing. Invoking
+                // Share.share() while the Modal is still on screen makes the
+                // share sheet present over (or get cancelled by) the dismissing
+                // modal — which is why this silently did nothing here while the
+                // identical button on the Settings screen (no modal) worked.
                 setOverflowOpen(false);
-                shareApp();
+                setTimeout(shareApp, 300);
               }}
             >
               <Icon name="share-variant-outline" size={18} color={theme.colors.primary} />
@@ -373,16 +344,21 @@ const HomeScreen = ({ navigation }) => {
             <TouchableOpacity
               style={styles.overflowRow}
               onPress={() => {
+                // Close the overflow menu, then open the About modal once the
+                // menu Modal has finished dismissing (same presentation
+                // ordering as Share, above).
                 setOverflowOpen(false);
-                navigation.navigate('ConnectSettings');
+                setTimeout(() => setAboutOpen(true), 300);
               }}
             >
               <Icon name="information-outline" size={18} color={theme.colors.primary} />
-              <Text style={styles.overflowText}>About & settings</Text>
+              <Text style={styles.overflowText}>About</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
+
+      <AboutModal visible={aboutOpen} onClose={() => setAboutOpen(false)} />
     </View>
   );
 };
@@ -396,30 +372,6 @@ const Stat = ({ label, value, caption, highlight }) => (
     </Text>
   </View>
 );
-
-const getGroupCounts = (analysis) => {
-  const counts = new Map();
-  (analysis?.profiles || []).forEach((p) => {
-    (p.groups || []).forEach((g) => {
-      counts.set(g.id, (counts.get(g.id) || 0) + 1);
-    });
-  });
-  const seen = new Map();
-  (analysis?.profiles || []).forEach((p) => {
-    (p.groups || []).forEach((g) => {
-      if (!seen.has(g.id)) seen.set(g.id, g);
-    });
-  });
-  // Order groups by their category (friends, then family/relatives, then
-  // office/colleagues, ...) using the canonical CATEGORIES order. Within a
-  // category, insertion order is preserved by JS's stable sort.
-  const categoryOrder = new Map(CATEGORIES.map((c, i) => [c.id, i]));
-  const rank = (g) =>
-    categoryOrder.has(g.categoryId) ? categoryOrder.get(g.categoryId) : CATEGORIES.length;
-  return [...seen.values()]
-    .sort((a, b) => rank(a) - rank(b))
-    .map((g) => ({ ...g, count: counts.get(g.id) || 0 }));
-};
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
@@ -464,7 +416,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   statCaption: { color: theme.colors.textSubtle },
-  groupRow: { marginTop: theme.spacing.sm },
   headerRightWrap: {
     flexDirection: 'row',
     alignItems: 'center',
