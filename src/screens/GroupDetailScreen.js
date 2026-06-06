@@ -1,7 +1,9 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { View, StyleSheet, FlatList } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import theme from '../theme';
 import AppHeader from '../components/AppHeader';
+import ContactSearchBar from '../components/ContactSearchBar';
 import ReconnectCard from '../components/ReconnectCard';
 import EmptyState from '../components/EmptyState';
 import ConnectSetupGate from '../components/ConnectSetupGate';
@@ -15,7 +17,18 @@ import { makeImmediateCall } from '../utils/makeImmediateCall';
  */
 const GroupDetailScreen = ({ navigation, route }) => {
   const groupId = route?.params?.groupId;
-  const { analysis } = useConnectAnalysis();
+  const { analysis, reanalyzeFromCache } = useConnectAnalysis();
+  const [results, setResults] = useState([]);
+
+  // Re-read group membership from storage whenever this screen regains focus.
+  // Tagging a contact into a group happens on the contact detail screen, which
+  // writes to MMKV; without this the already-mounted group screen keeps its
+  // stale analysis and the contact count stays at 0 after coming back.
+  useFocusEffect(
+    useCallback(() => {
+      reanalyzeFromCache();
+    }, [reanalyzeFromCache]),
+  );
 
   const group = useMemo(
     () => getDisplayGroups().find((g) => g.id === groupId) || null,
@@ -57,8 +70,9 @@ const GroupDetailScreen = ({ navigation, route }) => {
         onBack={() => navigation.goBack()}
       />
       <ConnectSetupGate>
+      <ContactSearchBar data={profiles} onResults={setResults} />
       <FlatList
-        data={profiles}
+        data={results}
         keyExtractor={(p) => p.contact.normalized || p.contact.key}
         renderItem={({ item }) => (
           <ReconnectCard
