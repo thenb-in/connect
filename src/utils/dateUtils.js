@@ -71,6 +71,26 @@ export const formatShortDateTime = (timestamp) => {
 };
 
 /**
+ * Formats a call duration given in seconds as a compact human string, e.g.
+ * "45s", "5m 12s", "1h 03m". Returns "0s" for a zero/negative/unusable input
+ * (e.g. a missed or rejected call that never connected).
+ */
+export const formatDuration = (seconds) => {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (total < 60) {
+    return `${total}s`;
+  }
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  if (mins < 60) {
+    return `${mins}m ${secs.toString().padStart(2, '0')}s`;
+  }
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return `${hours}h ${remMins.toString().padStart(2, '0')}m`;
+};
+
+/**
  * Extracts a millisecond timestamp from a call-log record, preferring the
  * numeric `timestamp` field and falling back to parsing `dateTime`.
  * Returns 0 when neither field is usable.
