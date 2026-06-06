@@ -29,6 +29,10 @@ const K = {
   NOTES: 'connect.notes',
   GOALS: 'connect.goals',
   PREFERRED_MODE: 'connect.preferredMode',
+  // When true the user opts into the power-user flow: LLM key, "tell us about
+  // you", contact clustering, and the relationship-analysis step. Off by
+  // default so first-run onboarding stays a quick import + hand-pick.
+  ADVANCED_MODE: 'connect.advancedMode',
   PERMS: 'connect.permsState',
   // Legacy single-key shape — migrated into LLM_KEYS / LLM_ACTIVE on first
   // read, then deleted. Kept here so clearConnectStorage still nukes them.
@@ -133,13 +137,48 @@ const DEFAULT_GROUP_COLOR = '#E07856';
 const normaliseGroup = (g) => {
   if (!g || typeof g !== 'object') return null;
   const categoryId = CATEGORY_IDS.has(g.categoryId) ? g.categoryId : 'unknown';
-  return {
+  const out = {
     id: g.id,
     name: g.name,
     color: g.color || DEFAULT_GROUP_COLOR,
     categoryId,
     doNotRemind: Boolean(g.doNotRemind),
   };
+  // Standard groups (e.g. "Want to connect") carry a flag so surfaces can
+  // treat them as built-in. Only persist it when true to keep the shape lean.
+  if (g.standard) out.standard = true;
+  return out;
+};
+
+// ---------- Standard groups ----------
+// Built-in groups that ship with the app and are seeded during onboarding.
+// Unlike the synthetic Unknown group these are REAL, persisted groups the user
+// can add contacts to — they just start life with a stable, known id so we can
+// reference and re-seed them. "Want to connect" is the first: the people the
+// user hand-picks during setup to stay in touch with.
+export const WANT_TO_CONNECT_GROUP_ID = 'g_want_to_connect';
+
+const STANDARD_GROUPS = Object.freeze([
+  Object.freeze({
+    id: WANT_TO_CONNECT_GROUP_ID,
+    name: 'Want to connect',
+    color: '#E07856',
+    categoryId: CATEGORY_ID.FRIENDS,
+    standard: true,
+  }),
+]);
+
+// Seeds any missing standard groups into the stored list, preserving the
+// curated order (standard groups first). Idempotent — safe to call on every
+// onboarding/setup pass. Returns the resulting groups list.
+export const ensureStandardGroups = () => {
+  const groups = getGroups();
+  const existing = new Set(groups.map((g) => g.id));
+  const missing = STANDARD_GROUPS.filter((g) => !existing.has(g.id));
+  if (!missing.length) return groups;
+  const next = [...missing, ...groups];
+  setGroups(next);
+  return getGroups();
 };
 
 // Returns the user's current groups. A missing key (fresh install or after a
@@ -727,6 +766,16 @@ export const setPreferredMode = (mode) => {
     storage.delete(K.PREFERRED_MODE);
   }
 };
+
+// ---------- Advanced mode ----------
+// Power-user opt-in. Gates the LLM key, user-context, clustering, and
+// relationship-analysis steps in onboarding, and the AI-categorisation
+// section in Settings. Defaults to false (simple mode).
+
+export const getAdvancedMode = () => Boolean(storage.getBoolean(K.ADVANCED_MODE));
+
+export const setAdvancedMode = (value) =>
+  storage.set(K.ADVANCED_MODE, Boolean(value));
 
 // ---------- Clear all (used by logout or factory reset) ----------
 

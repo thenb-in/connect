@@ -9,15 +9,16 @@ import {
   Linking,
   Alert,
   ActivityIndicator,
-  Platform,
+  Switch,
 } from 'react-native';
-import DeviceInfo from 'react-native-device-info';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import AppHeader from '../components/AppHeader';
 import {
   clearConnectStorage,
   clearConnectStorageSelective,
+  getAdvancedMode,
+  setAdvancedMode,
   getGroups,
   getLlmConfig,
   getLlmKeys,
@@ -34,13 +35,11 @@ import UserContextModal from '../components/UserContextModal';
 import { useRecategorise } from '../hooks/useRecategorise';
 import {
   APP_NAME,
-  APP_WEBSITE_URL,
   COMPANY_NAME,
   CONTACT_EMAIL,
   FOUNDER_CREDITS,
-  PRIVACY_POLICY_URL,
+  FOUNDER_URL,
   WHATSAPP_SUPPORT_NUMBER,
-  getStoreUrl,
   sendWhatsAppMessage,
   shareApp,
 } from '../utils/appShare';
@@ -129,6 +128,13 @@ const SettingsScreen = ({ navigation }) => {
   const [contextOpen, setContextOpen] = useState(false);
   const [contextBump, setContextBump] = useState(0);
   const [selectedScopes, setSelectedScopes] = useState(defaultSelectedScopes);
+  // Advanced mode opt-in (persisted). Gates the AI-categorisation section
+  // below — those features are the advanced ones.
+  const [advancedMode, setAdvancedModeState] = useState(() => getAdvancedMode());
+  const onToggleAdvancedMode = useCallback((value) => {
+    setAdvancedMode(value);
+    setAdvancedModeState(value);
+  }, []);
   const llm = useMemo(() => getLlmConfig(), [llmBump]);
   const llmKeysSnapshot = useMemo(() => getLlmKeys(), [llmBump]);
   const userProfileSnapshot = useMemo(() => getUserProfile(), [contextBump]);
@@ -251,7 +257,244 @@ const SettingsScreen = ({ navigation }) => {
     <View style={styles.container}>
       <AppHeader title="Settings" />
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.sectionLabel}>AI categorisation</Text>
+        <Text style={[styles.sectionLabel, styles.sectionLabelFirst]}>
+          Share & support
+        </Text>
+
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.row} onPress={shareApp} activeOpacity={0.7}>
+            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+              <Icon
+                name="share-variant-outline"
+                size={20}
+                color={theme.colors.primary}
+              />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>Share Connect</Text>
+              <Text style={styles.rowSubtitle}>
+                Send the Play Store link to a friend.
+              </Text>
+            </View>
+            <Icon
+              name="chevron-right"
+              size={22}
+              color={theme.colors.textSubtle}
+            />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() =>
+              sendWhatsAppMessage(
+                WHATSAPP_SUPPORT_NUMBER,
+                `Hi ${COMPANY_NAME} — I'm using ${APP_NAME} Connect and `,
+              )
+            }
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+              <Icon name="whatsapp" size={20} color={theme.colors.primary} />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>Message us on WhatsApp</Text>
+              <Text style={styles.rowSubtitle}>
+                Reach out with feedback, bugs, or feature requests.
+              </Text>
+            </View>
+            <Icon
+              name="chevron-right"
+              size={22}
+              color={theme.colors.textSubtle}
+            />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => Linking.openURL(`mailto:${CONTACT_EMAIL}`)}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+              <Icon
+                name="email-outline"
+                size={20}
+                color={theme.colors.primary}
+              />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>Email support</Text>
+              <Text style={styles.rowSubtitle}>{CONTACT_EMAIL}</Text>
+            </View>
+            <Icon
+              name="chevron-right"
+              size={22}
+              color={theme.colors.textSubtle}
+            />
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.sectionLabel}>Backup</Text>
+
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => {
+              setBackupBump((b) => b + 1);
+              setBackupMode('export');
+            }}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+              <Icon
+                name="file-download-outline"
+                size={20}
+                color={theme.colors.primary}
+              />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>Export your data</Text>
+              <Text style={styles.rowSubtitle}>
+                Pick what to include and save a portable JSON snapshot you can
+                stash anywhere.
+              </Text>
+            </View>
+            <Icon
+              name="chevron-right"
+              size={22}
+              color={theme.colors.textSubtle}
+            />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => {
+              setBackupBump((b) => b + 1);
+              setBackupMode('import');
+            }}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+              <Icon
+                name="file-import-outline"
+                size={20}
+                color={theme.colors.primary}
+              />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>Import from a file</Text>
+              <Text style={styles.rowSubtitle}>
+                Restore a previous export. You'll choose which scopes to bring
+                back before anything is written.
+              </Text>
+            </View>
+            <Icon
+              name="chevron-right"
+              size={22}
+              color={theme.colors.textSubtle}
+            />
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.sectionLabel}>Data & Privacy</Text>
+
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => navigation.navigate('ConnectCallLogs')}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+              <Icon name="phone-log" size={20} color={theme.colors.primary} />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>View saved call logs</Text>
+              <Text style={styles.rowSubtitle}>
+                See the call history Connect has stored on this device —
+                number, date &amp; time, and duration of each call.
+              </Text>
+            </View>
+            <Icon
+              name="chevron-right"
+              size={22}
+              color={theme.colors.textSubtle}
+            />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity
+            style={styles.row}
+            onPress={openFlow}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, styles.iconWrapDanger]}>
+              <Icon
+                name="trash-can-outline"
+                size={20}
+                color={theme.colors.danger}
+              />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={[styles.rowTitle, styles.rowTitleDanger]}>
+                Delete all Connect data
+              </Text>
+              <Text style={styles.rowSubtitle}>
+                Remove contacts cache, groups, notes, and reconnect history
+                from this device.
+              </Text>
+            </View>
+            <Icon
+              name="chevron-right"
+              size={22}
+              color={theme.colors.textSubtle}
+            />
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.sectionLabel}>Mode</Text>
+
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => onToggleAdvancedMode(!advancedMode)}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+              <Icon name="tune-variant" size={20} color={theme.colors.primary} />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>Advanced mode</Text>
+              <Text style={styles.rowSubtitle}>
+                Unlocks AI categorisation — LLM key, your context, clustering,
+                and relationship analysis. Off keeps Connect to a simple import
+                + hand-picked groups.
+              </Text>
+            </View>
+            {/* Display-only: the row TouchableOpacity owns the tap so the
+                control is reliably hittable. pointerEvents="none" stops the
+                Switch from swallowing the touch (which caused it to feel
+                unclickable). */}
+            <View pointerEvents="none" style={styles.switchWrap}>
+              <Switch
+                value={advancedMode}
+                onValueChange={onToggleAdvancedMode}
+                trackColor={{ true: theme.colors.primary }}
+              />
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {advancedMode ? (
+        <>
+        <Text style={styles.sectionLabel}>
+          AI categorisation
+        </Text>
 
         <View style={styles.card}>
           <TouchableOpacity
@@ -372,288 +615,8 @@ const SettingsScreen = ({ navigation }) => {
             />
           </TouchableOpacity>
         </View>
-
-        <Text style={styles.sectionLabel}>Share & support</Text>
-
-        <View style={styles.card}>
-          <TouchableOpacity style={styles.row} onPress={shareApp} activeOpacity={0.7}>
-            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-              <Icon
-                name="share-variant-outline"
-                size={20}
-                color={theme.colors.primary}
-              />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>Share Connect</Text>
-              <Text style={styles.rowSubtitle}>
-                Send the Play Store link to a friend.
-              </Text>
-            </View>
-            <Icon
-              name="chevron-right"
-              size={22}
-              color={theme.colors.textSubtle}
-            />
-          </TouchableOpacity>
-
-          <View style={styles.divider} />
-
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() =>
-              sendWhatsAppMessage(
-                WHATSAPP_SUPPORT_NUMBER,
-                `Hi ${COMPANY_NAME} — I'm using ${APP_NAME} Connect and `,
-              )
-            }
-            activeOpacity={0.7}
-          >
-            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-              <Icon name="whatsapp" size={20} color={theme.colors.primary} />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>Message us on WhatsApp</Text>
-              <Text style={styles.rowSubtitle}>
-                Reach out with feedback, bugs, or feature requests.
-              </Text>
-            </View>
-            <Icon
-              name="chevron-right"
-              size={22}
-              color={theme.colors.textSubtle}
-            />
-          </TouchableOpacity>
-
-          <View style={styles.divider} />
-
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() => Linking.openURL(`mailto:${CONTACT_EMAIL}`)}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-              <Icon
-                name="email-outline"
-                size={20}
-                color={theme.colors.primary}
-              />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>Email support</Text>
-              <Text style={styles.rowSubtitle}>{CONTACT_EMAIL}</Text>
-            </View>
-            <Icon
-              name="chevron-right"
-              size={22}
-              color={theme.colors.textSubtle}
-            />
-          </TouchableOpacity>
-        </View>
-
-        <Text style={styles.sectionLabel}>About</Text>
-
-        <View style={styles.card}>
-          <View style={styles.row}>
-            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-              <Icon
-                name="account-heart-outline"
-                size={20}
-                color={theme.colors.primary}
-              />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>{APP_NAME}</Text>
-              <Text style={styles.rowSubtitle}>
-                A calmer way to stay in touch with the people who matter.
-              </Text>
-              <Text style={styles.rowSubtitle}>
-                Version {DeviceInfo.getVersion()}
-              </Text>
-              {/* <Text style={styles.rowSubtitle}>By {COMPANY_NAME}</Text> */}
-              <TouchableOpacity onPress={() => Linking.openURL(APP_WEBSITE_URL)}>
-                <Text style={styles.linkText}>{APP_WEBSITE_URL}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => Linking.openURL(PRIVACY_POLICY_URL)}
-              >
-                <Text style={styles.linkText}>Privacy policy</Text>
-              </TouchableOpacity>
-              {getStoreUrl() ? (
-                <TouchableOpacity onPress={() => Linking.openURL(getStoreUrl())}>
-                  <Text style={styles.linkText}>
-                    {Platform.OS === 'ios'
-                      ? 'Rate us on the App Store'
-                      : 'Rate us on the Play Store'}
-                  </Text>
-                </TouchableOpacity>
-              ) : (
-                <Text style={[styles.rowSubtitle, styles.comingSoon]}>
-                  iOS app coming soon
-                </Text>
-              )}
-            </View>
-          </View>
-        </View>
-
-        <Text style={styles.sectionLabel}>Backup</Text>
-
-        <View style={styles.card}>
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() => {
-              setBackupBump((b) => b + 1);
-              setBackupMode('export');
-            }}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-              <Icon
-                name="file-download-outline"
-                size={20}
-                color={theme.colors.primary}
-              />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>Export your data</Text>
-              <Text style={styles.rowSubtitle}>
-                Pick what to include and save a portable JSON snapshot you can
-                stash anywhere.
-              </Text>
-            </View>
-            <Icon
-              name="chevron-right"
-              size={22}
-              color={theme.colors.textSubtle}
-            />
-          </TouchableOpacity>
-
-          <View style={styles.divider} />
-
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() => {
-              setBackupBump((b) => b + 1);
-              setBackupMode('import');
-            }}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-              <Icon
-                name="file-import-outline"
-                size={20}
-                color={theme.colors.primary}
-              />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>Import from a file</Text>
-              <Text style={styles.rowSubtitle}>
-                Restore a previous export. You'll choose which scopes to bring
-                back before anything is written.
-              </Text>
-            </View>
-            <Icon
-              name="chevron-right"
-              size={22}
-              color={theme.colors.textSubtle}
-            />
-          </TouchableOpacity>
-        </View>
-
-        <Text style={styles.sectionLabel}>Data & Privacy</Text>
-
-        <View style={styles.card}>
-          <View style={styles.row}>
-            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-              <Icon
-                name="shield-lock-outline"
-                size={20}
-                color={theme.colors.primary}
-              />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>Local-only storage</Text>
-              <Text style={styles.rowSubtitle}>
-                Everything in Connect lives on this device. Nothing is sent to
-                a server.
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.divider} />
-
-          <View style={styles.row}>
-            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-              <Icon
-                name="eye-outline"
-                size={20}
-                color={theme.colors.primary}
-              />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>Read-only access</Text>
-              <Text style={styles.rowSubtitle}>
-                Connect only reads your contacts and call log to surface
-                gentle reminders — it never edits, deletes, or shares them.
-                Nothing ever leaves this device.
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.divider} />
-
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() => navigation.navigate('ConnectCallLogs')}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-              <Icon name="phone-log" size={20} color={theme.colors.primary} />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>View saved call logs</Text>
-              <Text style={styles.rowSubtitle}>
-                See the call history Connect has stored on this device —
-                number, date &amp; time, and duration of each call.
-              </Text>
-            </View>
-            <Icon
-              name="chevron-right"
-              size={22}
-              color={theme.colors.textSubtle}
-            />
-          </TouchableOpacity>
-
-          <View style={styles.divider} />
-
-          <TouchableOpacity
-            style={styles.row}
-            onPress={openFlow}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.iconWrap, styles.iconWrapDanger]}>
-              <Icon
-                name="trash-can-outline"
-                size={20}
-                color={theme.colors.danger}
-              />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={[styles.rowTitle, styles.rowTitleDanger]}>
-                Delete all Connect data
-              </Text>
-              <Text style={styles.rowSubtitle}>
-                Remove contacts cache, groups, notes, and reconnect history
-                from this device.
-              </Text>
-            </View>
-            <Icon
-              name="chevron-right"
-              size={22}
-              color={theme.colors.textSubtle}
-            />
-          </TouchableOpacity>
-        </View>
+        </>
+        ) : null}
 
         <View style={styles.brand}>
           <View style={styles.brandIconWrap}>
@@ -665,9 +628,17 @@ const SettingsScreen = ({ navigation }) => {
           </View>
           <Text style={styles.brandWordmark}>connect</Text>
           <Text style={styles.brandTagline}>
-            staying in touch.
+            Stay in touch.
           </Text>
-          <Text style={styles.brandCredits}>{FOUNDER_CREDITS}</Text>
+          <Text style={styles.brandCredits}>
+            {FOUNDER_CREDITS}{' '}
+            <Text
+              style={styles.brandCreditsLink}
+              onPress={() => Linking.openURL(FOUNDER_URL)}
+            >
+              {COMPANY_NAME}
+            </Text>
+          </Text>
         </View>
       </ScrollView>
 
@@ -913,9 +884,11 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     letterSpacing: 0.6,
     textTransform: 'uppercase',
+    marginTop: theme.spacing.xl,
     marginBottom: theme.spacing.sm,
     marginLeft: theme.spacing.xs,
   },
+  sectionLabelFirst: { marginTop: 0 },
   card: {
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.lg,
@@ -939,6 +912,7 @@ const styles = StyleSheet.create({
   iconWrapNeutral: { backgroundColor: theme.colors.chipBg },
   iconWrapDanger: { backgroundColor: 'rgba(176, 70, 60, 0.10)' },
   rowBody: { flex: 1 },
+  switchWrap: { marginLeft: theme.spacing.sm, alignSelf: 'center' },
   rowTitle: {
     fontSize: theme.font.body,
     fontWeight: '600',
@@ -990,10 +964,9 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.sm,
     textAlign: 'center',
   },
-  comingSoon: {
-    marginTop: theme.spacing.xs,
-    fontStyle: 'italic',
-    color: theme.colors.textSubtle,
+  brandCreditsLink: {
+    color: theme.colors.primary,
+    textDecorationLine: 'underline',
   },
 
   modalBackdrop: {
@@ -1107,12 +1080,6 @@ const styles = StyleSheet.create({
   modalBtnGhostDangerText: {
     color: theme.colors.danger,
     fontWeight: '700',
-  },
-  linkText: {
-    color: theme.colors.primary,
-    fontSize: theme.font.small,
-    textDecorationLine: 'underline',
-    marginTop: theme.spacing.xs,
   },
   btnDisabled: { opacity: 0.6 },
 });

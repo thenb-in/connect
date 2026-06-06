@@ -13,7 +13,7 @@ import {
   ScrollView,
   Linking,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import {
@@ -28,10 +28,17 @@ import {
   hasLlmKey,
   setLlmConfig,
   hasUserProfile,
+  getContacts,
+  addContactsToGroup,
+  ensureStandardGroups,
+  getAdvancedMode,
+  setAdvancedMode,
+  WANT_TO_CONNECT_GROUP_ID,
   LLM_PROVIDERS,
   LLM_PROVIDER_META,
 } from '../storage';
 import CategoriseProposalModal from '../components/CategoriseProposalModal';
+import ContactPickerModal from '../components/ContactPickerModal';
 import UserContextModal from '../components/UserContextModal';
 import { useRecategorise } from '../hooks/useRecategorise';
 
@@ -133,6 +140,18 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   const [analyzing, setAnalyzing] = useState(false);
   const [done, setDone] = useState(false);
 
+  // Advanced mode opt-in (persisted). When off, onboarding is a quick import +
+  // hand-pick; the LLM key, "tell us about you", clustering, and analysis
+  // steps are hidden. Toggled via the tickbox on this screen and from Settings.
+  const [advancedMode, setAdvancedModeState] = useState(() => getAdvancedMode());
+  const toggleAdvancedMode = useCallback(() => {
+    setAdvancedModeState((cur) => {
+      const next = !cur;
+      setAdvancedMode(next);
+      return next;
+    });
+  }, []);
+
   // LLM step state.
   const [llmProvider, setLlmProvider] = useState(initialLlm.provider || 'google');
   const [llmKey, setLlmKey] = useState(initialLlm.key || '');
@@ -182,7 +201,18 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   // onboarding switched to the shared propose+review flow — same modal that
   // Settings and Groups use, so the user gets one consistent experience
   // regardless of entry point.
-  const [progress, setProgress] = useState({ cluster: 'pending', analyse: 'pending' });
+  const [progress, setProgress] = useState({
+    wantToConnect: 'pending',
+    cluster: 'pending',
+    analyse: 'pending',
+  });
+
+  // The hand-pick "Want to connect" step. After contacts import we open a
+  // searchable picker so the user can seed their standard "Want to connect"
+  // group before clustering/analysis run. `wantContacts` is snapshotted from
+  // the freshly-imported list so the modal has data without re-reading MMKV.
+  const [wantPickerOpen, setWantPickerOpen] = useState(false);
+  const [wantContacts, setWantContacts] = useState([]);
 
   // The hook owns the LLM call, the proposal state, the LLM-key prompt, and
   // the apply-on-confirm step — shared with Settings/Groups so all three
@@ -213,22 +243,17 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
     setAnalyzing(false);
   }, [perms.callLog]);
 
-  const handleAnalyze = async () => {
-    setAnalyzing(true);
-    // Stage 1: import contacts so the clusterer has data to work with.
-    // We deliberately skip the call log here to keep the cluster step fast;
-    // the analyse stage below picks it up.
-    setProgress({ cluster: 'running', analyse: 'pending' });
-    await refreshAnalysis({
-      refreshContacts: perms.contacts === 'granted',
-      refreshCallLogs: false,
-    });
-
-    // Stage 2: cluster the imported contacts. With an LLM key we propose
-    // groups and let the user review/edit them in the same modal Settings
-    // and Groups use. Without a key, skip and proceed straight to analyse —
-    // local heuristics alone are too rough for an unattended onboarding step.
-    if (hasLlmKey()) {
+  // Stage 2: cluster the imported contacts. With an LLM key we propose groups
+  // and let the user review/edit them in the same modal Settings and Groups
+  // use. Without a key, skip and proceed straight to analyse — local
+  // heuristics alone are too rough for an unattended onboarding step. Reached
+  // only after the "Want to connect" picker is dismissed.
+  const runClusterAndAnalyse = useCallback(async () => {
+    // Clustering is an advanced-mode-only feature and needs an LLM key. In
+    // simple mode (or with no key) we skip straight to finishing — analysis
+    // still runs, it's just not surfaced as an LLM/cluster step.
+    if (advancedMode && hasLlmKey()) {
+      setProgress((p) => ({ ...p, cluster: 'running' }));
       // fire-and-forget: the hook drives the modal lifecycle from here.
       // The proposal-watching effect below picks up the next state.
       startCategorise({ allowNewGroups: true });
@@ -236,7 +261,45 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
       setProgress((p) => ({ ...p, cluster: 'skipped' }));
       await finishOnboarding();
     }
+  }, [advancedMode, startCategorise, finishOnboarding]);
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true);
+    // Stage 1: import contacts so the clusterer (and the picker below) has
+    // data to work with. We deliberately skip the call log here to keep this
+    // step fast; the analyse stage picks it up.
+    setProgress({ wantToConnect: 'running', cluster: 'pending', analyse: 'pending' });
+    await refreshAnalysis({
+      refreshContacts: perms.contacts === 'granted',
+      refreshCallLogs: false,
+    });
+
+    // Seed the standard "Want to connect" group so it always exists, then let
+    // the user hand-pick people into it before clustering runs.
+    ensureStandardGroups();
+    setWantContacts(getContacts());
+    setWantPickerOpen(true);
   };
+
+  // "Want to connect" picker confirmed: union the chosen contacts into the
+  // standard group, then fall through to clustering + analysis.
+  const onWantToConnectConfirm = useCallback(
+    (phones) => {
+      if (phones && phones.length) {
+        addContactsToGroup(phones, WANT_TO_CONNECT_GROUP_ID);
+      }
+      setWantPickerOpen(false);
+      setProgress((p) => ({ ...p, wantToConnect: 'granted' }));
+      runClusterAndAnalyse();
+    },
+    [runClusterAndAnalyse],
+  );
+
+  const onWantToConnectSkip = useCallback(() => {
+    setWantPickerOpen(false);
+    setProgress((p) => ({ ...p, wantToConnect: 'skipped' }));
+    runClusterAndAnalyse();
+  }, [runClusterAndAnalyse]);
 
   // Watches the categorisation hook. When the LLM call settles, either we
   // have a proposal to review (modal opens, cluster → awaiting_review) or an
@@ -288,6 +351,10 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   const autoFiredRef = useRef(false);
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
+    // Only relevant to advanced mode — in simple mode there's no LLM/context
+    // step to skip, and the picker gives the user something to do, so we just
+    // show the Continue button rather than auto-firing.
+    if (!advancedMode) return;
     if (autoFiredRef.current) return;
     if (done || analyzing) return;
     if (perms.contacts !== 'granted') return;
@@ -297,12 +364,20 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
     if (contextState === 'pending') return;
     autoFiredRef.current = true;
     handleAnalyze();
-  }, [perms.contacts, llmState, contextState, done, analyzing]);
+  }, [advancedMode, perms.contacts, llmState, contextState, done, analyzing]);
 
-  const handleEnter = () => {
+  const handleEnter = useCallback(() => {
     if (onFinished) onFinished();
     else if (navigation?.replace) navigation.replace('ConnectHome');
-  };
+  }, [onFinished, navigation]);
+
+  // Once setup finishes we show a brief loading screen and auto-enter Connect
+  // after a short beat — no "Enter Connect" tap required.
+  useEffect(() => {
+    if (!done) return undefined;
+    const t = setTimeout(handleEnter, 1200);
+    return () => clearTimeout(t);
+  }, [done, handleEnter]);
 
   const permsReady =
     perms.contacts === 'granted' &&
@@ -316,25 +391,29 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   const llmReady = llmState !== 'pending';
   const contextReady = contextState !== 'pending';
 
-  const canAnalyze = permsReady && llmReady && contextReady;
+  // In simple mode the LLM key + context steps don't exist, so permissions
+  // alone unlock the Continue button. Advanced mode still gates on them.
+  const canAnalyze =
+    permsReady && (!advancedMode || (llmReady && contextReady));
 
   const providerMeta = LLM_PROVIDER_META[llmProvider] || LLM_PROVIDER_META.google;
 
   useEffect(() => {
     // Once the user has granted permissions, the next interactive card (LLM
     // key, then user context) is what they need next — scroll the page so
-    // it's visible without them hunting for it.
-    if (permsReady && (!llmReady || !contextReady)) {
+    // it's visible without them hunting for it. Only advanced mode has those
+    // cards.
+    if (advancedMode && permsReady && (!llmReady || !contextReady)) {
       const t = setTimeout(() => {
         scrollRef.current?.scrollToEnd?.({ animated: true });
       }, 150);
       return () => clearTimeout(t);
     }
     return undefined;
-  }, [permsReady, llmReady, contextReady]);
+  }, [advancedMode, permsReady, llmReady, contextReady]);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <View style={styles.safeArea}>
       <StatusBar
         barStyle="dark-content"
         backgroundColor={theme.colors.background}
@@ -388,6 +467,33 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
         </View>
 
         <View style={styles.bodyWrap}>
+          {!analyzing && !done ? (
+            <TouchableOpacity
+              style={styles.advancedRow}
+              onPress={toggleAdvancedMode}
+              activeOpacity={0.7}
+            >
+              <View
+                style={[
+                  styles.advancedCheckbox,
+                  advancedMode && styles.advancedCheckboxChecked,
+                ]}
+              >
+                {advancedMode ? (
+                  <Icon name="check" size={14} color={theme.colors.surface} />
+                ) : null}
+              </View>
+              <View style={styles.advancedTextWrap}>
+                <Text style={styles.advancedTitle}>Advanced setup</Text>
+                <Text style={styles.advancedBody}>
+                  Add an LLM key, tell us about you, and auto-cluster + analyse
+                  your contacts. Leave it off for a quick import — you can turn
+                  it on later in Settings.
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ) : null}
+
           {(() => {
             // iOS doesn't expose call logs, so the call-history step is just
             // noise — hide it. When the user has also explicitly skipped the
@@ -395,14 +501,21 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
             // above) so the Cluster + Analyse steps are hidden until the
             // work fires.
             const showCallLogStep = Platform.OS === 'android';
+            // Cluster + Analyse are advanced-only and, on iOS with the LLM
+            // step skipped, fire automatically — so hide them until they run.
             const showWorkSteps =
-              Platform.OS === 'android' || llmState !== 'skipped';
+              advancedMode &&
+              (Platform.OS === 'android' || llmState !== 'skipped');
             const clusterBody =
               progress.cluster === 'awaiting_review'
                 ? 'Review the proposed groups in the popup. Remove, rename, or add groups before applying.'
                 : llmState === 'granted'
                 ? 'Group your contacts with the LLM into Friends, Office, Family, ….'
                 : 'Skipped — add an LLM key and run "Re-categorise contacts" from Settings any time.';
+            const wantToConnectBody =
+              progress.wantToConnect === 'running'
+                ? 'Search and pick the people you want to stay in touch with in the popup.'
+                : 'Hand-pick people into your "Want to connect" group — search, then select all.';
             // Declarative step list. Build it once, filter out hidden steps,
             // then number sequentially. Beats a mutable `let n = 1; n++;`
             // counter sprinkled through 6 conditional JSX blocks.
@@ -419,17 +532,23 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
                 body: 'Used purely to spot communication patterns — no audio or content is read.',
                 state: perms.callLog,
               },
-              {
+              advancedMode && {
                 icon: 'creation',
                 title: 'LLM key (optional)',
                 body: 'Lets us auto-group contacts into Friends, Office, Family, …. You can add it later from Settings.',
                 state: llmState,
               },
-              {
+              advancedMode && {
                 icon: 'account-question-outline',
                 title: 'Tell us about you (optional)',
                 body: 'A few quick facts — schools, colleges, workplaces, places lived — so the LLM names groups correctly. Always skippable.',
                 state: contextState,
+              },
+              {
+                icon: 'account-multiple-plus-outline',
+                title: 'Choose who to connect with',
+                body: wantToConnectBody,
+                state: progress.wantToConnect,
               },
               showWorkSteps && {
                 icon: 'account-group-outline',
@@ -461,7 +580,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
             );
           })()}
 
-          {permsReady && llmReady && !contextReady ? (
+          {advancedMode && permsReady && llmReady && !contextReady ? (
             <View style={styles.llmCard}>
               <Text style={styles.llmTitle}>Tell us about you</Text>
               <Text style={styles.llmBody}>
@@ -487,7 +606,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
             </View>
           ) : null}
 
-          {permsReady && !llmReady ? (
+          {advancedMode && permsReady && !llmReady ? (
             <View style={styles.llmCard}>
               <Text style={styles.llmTitle}>Smart categorisation</Text>
               <Text style={styles.llmBody}>
@@ -579,7 +698,9 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
               {analyzing ? (
                 <ActivityIndicator color={theme.colors.surface} />
               ) : (
-                <Text style={styles.primaryBtnText}>Analyse relationships</Text>
+                <Text style={styles.primaryBtnText}>
+                  {advancedMode ? 'Analyse relationships' : 'Continue'}
+                </Text>
               )}
             </TouchableOpacity>
           ) : (
@@ -591,6 +712,16 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
         </View>
       </ScrollView>
       </KeyboardAvoidingView>
+
+      <ContactPickerModal
+        visible={wantPickerOpen}
+        title="Who do you want to connect with?"
+        subtitle="Pick the people you most want to stay in touch with. They go into your standard “Want to connect” group. Search, then “Select all” to grab a whole group at once."
+        contacts={wantContacts}
+        confirmLabel="Want to connect"
+        onConfirm={onWantToConnectConfirm}
+        onSkip={onWantToConnectSkip}
+      />
 
       <CategoriseProposalModal
         visible={!!pendingProposal}
@@ -606,12 +737,42 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
         onSaved={() => setContextState('granted')}
         onSkipped={() => setContextState('skipped')}
       />
-    </SafeAreaView>
+
+      {done ? (
+        <View style={styles.loadingOverlay}>
+          <View
+            style={[
+              styles.heroIconWrap,
+              { width: heroSize, height: heroSize, borderRadius: heroSize / 2 },
+            ]}
+          >
+            <Icon name="account-heart" size={heroIconSize} color={theme.colors.primary} />
+          </View>
+          <ActivityIndicator
+            color={theme.colors.primary}
+            style={{ marginTop: theme.spacing.lg }}
+          />
+          <Text style={styles.loadingText}>Setting up Connect…</Text>
+        </View>
+      ) : null}
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: theme.colors.background },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: theme.colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: theme.spacing.md,
+    fontSize: theme.font.body,
+    color: theme.colors.textMuted,
+    fontWeight: '600',
+  },
   kbWrap: { flex: 1 },
   container: {
     flexGrow: 1,
@@ -620,6 +781,44 @@ const styles = StyleSheet.create({
   bodyWrap: {
     flex: 1,
     justifyContent: 'center',
+  },
+  advancedRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: theme.spacing.md,
+    marginTop: theme.spacing.lg,
+  },
+  advancedCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: theme.colors.border,
+    marginRight: theme.spacing.md,
+    marginTop: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surface,
+  },
+  advancedCheckboxChecked: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  advancedTextWrap: { flex: 1 },
+  advancedTitle: {
+    fontSize: theme.font.body,
+    fontWeight: '700',
+    color: theme.colors.text,
+  },
+  advancedBody: {
+    fontSize: theme.font.small,
+    color: theme.colors.textMuted,
+    lineHeight: 18,
+    marginTop: 2,
   },
   heroIconWrap: {
     backgroundColor: theme.colors.surface,
