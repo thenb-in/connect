@@ -209,60 +209,68 @@ const HomeScreen = ({ navigation }) => {
           </>
         ) : null}
 
-        <SectionHeader
-          title="Reconnect today"
-          caption="Quietly nudging the relationships worth keeping warm"
-          actionLabel={
-            (analysis?.reconnectToday || []).length > 5 ? 'See all' : null
-          }
-          onActionPress={() => navigation.navigate('ConnectReconnect')}
-        />
-        {(analysis?.reconnectToday || []).length === 0 ? (
-          <EmptyState
-            icon="weather-sunny"
-            title={hasCallLogSignal ? 'All caught up' : 'Waiting for call history'}
-            body={
-              hasCallLogSignal
-                ? 'Nothing pressing right now — enjoy the quiet.'
-                : Platform.OS === 'android'
-                ? 'Once we have your call log we can spot dormant friendships.'
-                : 'iOS doesn\'t expose call history — use the random picks above instead.'
-            }
-          />
-        ) : (
-          (analysis?.reconnectToday || []).slice(0, 5).map((p) => (
-            <ReconnectCard
-              key={p.contact.normalized}
-              profile={p}
-              onPress={() => onCardPress(p)}
-              onCall={() => onCall(p)}
-            />
-          ))
-        )}
-
-        {/* On iOS there is no call history to derive lost connections from, so an
-            empty "Lost connections" lane is just noise — hide the whole section
-            unless we actually have cards to show. Android keeps the soft empty
-            state since its call log can legitimately produce zero results. */}
-        {Platform.OS !== 'android' && (analysis?.lostConnections || []).length === 0 ? null : (
+        {/* iOS has no call history to derive reconnect suggestions from, so an
+            empty lane is just noise — hide the whole section unless we have
+            cards. Android keeps the soft empty state since its call log can
+            legitimately produce zero results. */}
+        {Platform.OS !== 'android' && (analysis?.reconnectToday || []).length === 0 ? null : (
           <>
             <SectionHeader
-              title="Lost connections"
-              caption="Strong past communication, quiet for a while"
+              title="Reconnect today"
+              caption="Quietly nudging the relationships worth keeping warm"
               actionLabel={
-                (analysis?.lostConnections || []).length > 5 ? 'See all' : null
+                (analysis?.reconnectToday || []).length > 5 ? 'See all' : null
               }
-              onActionPress={() => navigation.navigate('ConnectLost')}
+              onActionPress={() => navigation.navigate('ConnectReconnect')}
             />
-            {(analysis?.lostConnections || []).length === 0 ? (
+            {(analysis?.reconnectToday || []).length === 0 ? (
               <EmptyState
-                icon="account-clock-outline"
-                title="No lost connections yet"
-                body="Your historically strong relationships are still warm."
+                icon="weather-sunny"
+                title={hasCallLogSignal ? 'All caught up' : 'Waiting for call history'}
+                body={
+                  hasCallLogSignal
+                    ? 'Nothing pressing right now — enjoy the quiet.'
+                    : Platform.OS === 'android'
+                    ? 'Once we have your call log we can spot dormant friendships.'
+                    : 'iOS doesn\'t expose call history — use the random picks above instead.'
+                }
+              />
+            ) : (
+              (analysis?.reconnectToday || []).slice(0, 5).map((p) => (
+                <ReconnectCard
+                  key={p.contact.normalized}
+                  profile={p}
+                  onPress={() => onCardPress(p)}
+                  onCall={() => onCall(p)}
+                />
+              ))
+            )}
+          </>
+        )}
+
+        {/* Missed connections: people who called and we never called back. Same
+            iOS/Android visibility rule as lost connections — iOS has no call
+            history to derive these from, so hide the lane entirely when empty;
+            Android keeps the soft empty state. */}
+        {Platform.OS !== 'android' && (analysis?.missedCallsToReturn || []).length === 0 ? null : (
+          <>
+            <SectionHeader
+              title="Missed connections"
+              caption="They called — you have not called back yet"
+              actionLabel={
+                (analysis?.missedCallsToReturn || []).length > 5 ? 'See all' : null
+              }
+              onActionPress={() => navigation.navigate('ConnectMissed')}
+            />
+            {(analysis?.missedCallsToReturn || []).length === 0 ? (
+              <EmptyState
+                icon="phone-missed-outline"
+                title="No missed connections"
+                body="You have returned everyone's calls."
                 compact
               />
             ) : (
-              (analysis?.lostConnections || []).slice(0, 4).map((p) => (
+              (analysis?.missedCallsToReturn || []).slice(0, 4).map((p) => (
                 <ReconnectCard
                   key={p.contact.normalized}
                   profile={p}
