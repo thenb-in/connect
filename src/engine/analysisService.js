@@ -95,8 +95,15 @@ export const refreshAnalysis = async (opts = {}) => {
     // existing cache. This makes pull-to-refresh and focus syncs nearly
     // instant on devices with large call logs, instead of re-reading every
     // row from the content provider each time.
+    //
+    // Crucially, we only go incremental when we actually have a prior call-log
+    // snapshot to merge into. `lastAnalyzedAt` can be set by a run that never
+    // imported call logs at all — e.g. the onboarding stage that imports
+    // contacts only, or analysis that ran before call-log permission was
+    // granted. In those cases the cache is empty and a 2-minute delta would
+    // silently skip the user's entire call history, so we force a full import.
     const lastSync = getLastAnalyzedAt();
-    const incremental = lastSync > 0;
+    const incremental = lastSync > 0 && callLogs.length > 0;
     try {
       // throwOnDeny so a silent permission revoke surfaces as a real error
       // instead of returning [] and wiping the cached snapshot below.
