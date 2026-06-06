@@ -201,4 +201,4 @@ const styles = StyleSheet.create({
 });
 
 export default ReconnectCard;
-export { reasonForProfile };
+export { reasonForProfile, formatLastSpoke, initialsFor };

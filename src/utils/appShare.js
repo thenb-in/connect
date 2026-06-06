@@ -39,6 +39,44 @@ export const shareApp = async () => {
 };
 
 /**
+ * Shares a milestone as a celebratory, bragging-rights message via the native
+ * share sheet. Earned milestones get a trophy-forward headline; in-progress
+ * ones get a "chasing it" framing so sharing still feels good before the win.
+ */
+export const shareMilestone = async (milestone) => {
+  if (!milestone) return;
+  const storeUrl = getStoreUrl();
+  const earned = milestone.achieved;
+  const value = Math.min(milestone.value ?? 0, milestone.target ?? 0);
+
+  const headline = earned
+    ? `🏆 Milestone unlocked on ${APP_NAME}: ${milestone.title}!`
+    : `On a mission with ${APP_NAME}: "${milestone.title}" — ${value} / ${milestone.target} there. 💪`;
+
+  let flavor = milestone.description || '';
+  if (earned && milestone.type === 'streak') {
+    flavor = `${milestone.target}-day streak of actually reaching out to the people I care about. 🔥`;
+  } else if (earned && milestone.type === 'people') {
+    flavor = `Reconnected with ${milestone.target} people who matter. ❤️`;
+  }
+
+  const lines = [
+    headline,
+    flavor,
+    '',
+    `Staying close with ${APP_NAME} — the calmer way to keep your circle warm.`,
+    storeUrl
+      ? storeUrl
+      : `Coming soon to iOS. Available now on Android: ${PLAY_STORE_URL}`,
+  ];
+  try {
+    await Share.share({ message: lines.filter(Boolean).join('\n') });
+  } catch (err) {
+    console.warn('[appShare] milestone share failed:', err?.message || err);
+  }
+};
+
+/**
  * Sends a WhatsApp text message to the given phone number. Phone should be
  * digits (with or without country code). Falls back to an alert if WhatsApp
  * isn't installed.

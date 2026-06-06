@@ -1,11 +1,12 @@
-import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, Platform, ToastAndroid } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import AppHeader from '../components/AppHeader';
 import EmptyState from '../components/EmptyState';
 import ConnectSetupGate from '../components/ConnectSetupGate';
-import { getCallLogs, getContacts } from '../storage';
+import AddCallLogModal from '../components/AddCallLogModal';
+import { addCallLog, getCallLogs, getContacts } from '../storage';
 import { normalizeLast10 } from '../utils/phone';
 import { formatTimestamp, formatDuration, getLogTimestamp } from '../utils/dateUtils';
 
@@ -37,9 +38,15 @@ const typeMeta = (raw) => {
  * user can audit the data the app keeps.
  */
 const CallLogsScreen = ({ navigation }) => {
-  const rows = useMemo(() => {
+  const [addOpen, setAddOpen] = useState(false);
+
+  const contacts = useMemo(() => getContacts(), []);
+
+  // Reads the saved call-log snapshot from MMKV and shapes it for the list.
+  // Held in state (not a plain memo) so a manual add can re-pull it.
+  const buildRows = useCallback(() => {
     const nameByPhone = new Map();
-    getContacts().forEach((c) => {
+    contacts.forEach((c) => {
       if (c.normalized && !nameByPhone.has(c.normalized)) {
         nameByPhone.set(c.normalized, c.name);
       }
@@ -58,7 +65,19 @@ const CallLogsScreen = ({ navigation }) => {
         };
       })
       .sort((a, b) => b.ts - a.ts);
-  }, []);
+  }, [contacts]);
+
+  const [rows, setRows] = useState(buildRows);
+
+  const handleAdd = useCallback((entry) => {
+    const saved = addCallLog(entry);
+    setAddOpen(false);
+    if (!saved) return;
+    setRows(buildRows());
+    if (Platform.OS === 'android') {
+      ToastAndroid.show('Call log added', ToastAndroid.SHORT);
+    }
+  }, [buildRows]);
 
   return (
     <View style={styles.container}>
@@ -66,6 +85,8 @@ const CallLogsScreen = ({ navigation }) => {
         title="Saved call logs"
         subtitle={rows.length ? `${rows.length} entries on this device` : undefined}
         onBack={() => navigation.goBack()}
+        rightIcon="plus"
+        onRightPress={() => setAddOpen(true)}
       />
       <ConnectSetupGate>
         <FlatList
@@ -104,6 +125,13 @@ const CallLogsScreen = ({ navigation }) => {
           }}
         />
       </ConnectSetupGate>
+
+      <AddCallLogModal
+        visible={addOpen}
+        contacts={contacts}
+        onClose={() => setAddOpen(false)}
+        onAdd={handleAdd}
+      />
     </View>
   );
 };

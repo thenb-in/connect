@@ -16,6 +16,7 @@ import theme from '../theme';
 import AppHeader from '../components/AppHeader';
 import { makeImmediateCall } from '../utils/makeImmediateCall';
 import ReconnectCard from '../components/ReconnectCard';
+import SpotlightHero from '../components/SpotlightHero';
 import SectionHeader from '../components/SectionHeader';
 import EmptyState from '../components/EmptyState';
 import MilestonesCard from '../components/MilestonesCard';
@@ -42,7 +43,7 @@ const HomeScreen = ({ navigation }) => {
   const { analysis, refreshing, refresh, syncOnFocus } = useConnectAnalysis();
   // Recompute milestone progress whenever the analysis regenerates, since
   // reconnects are recorded as a side effect of a refresh/focus sync.
-  const { milestones } = useMilestones(analysis?.generatedAt);
+  const { milestones, stats } = useMilestones(analysis?.generatedAt);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
 
@@ -114,6 +115,19 @@ const HomeScreen = ({ navigation }) => {
     return out.slice(0, 10);
   }, [analysis, hasCallLogSignal]);
 
+  // The magnetic top-of-screen highlights. When we have call-log signal these
+  // are the engine's "reconnect today" picks; otherwise we fall back to one
+  // person per group so the spotlight is never empty for a brand-new user.
+  const highlights = useMemo(
+    () =>
+      hasCallLogSignal
+        ? analysis?.reconnectToday || []
+        : randomPerGroup.map((r) => r.profile),
+    [hasCallLogSignal, analysis, randomPerGroup],
+  );
+  const hero = highlights[0] || null;
+  const queue = useMemo(() => highlights.slice(1, 8), [highlights]);
+
   const onCardPress = useCallback(
     (profile) => {
       navigation.navigate('ConnectContactDetail', {
@@ -167,9 +181,49 @@ const HomeScreen = ({ navigation }) => {
           ) : null;
         })()}
 
-        {/* Top-of-funnel quick stats — soft, never KPI-style. */}
+        {/* The magnetic centrepiece: one person to call right now, plus an
+            "up next" queue. Falls back to one person per group when there's no
+            call-log signal yet (see `highlights`). */}
+        <SectionHeader
+          title={hasCallLogSignal ? 'Reconnect today' : 'Say hi today'}
+          caption={
+            hasCallLogSignal
+              ? 'The relationship worth a call right now'
+              : 'No call history yet — someone from each of your circles'
+          }
+          actionLabel={highlights.length > 8 ? 'See all' : null}
+          onActionPress={() => navigation.navigate('ConnectReconnect')}
+        />
+        {hero ? (
+          <SpotlightHero
+            hero={hero}
+            queue={queue}
+            onPress={onCardPress}
+            onCall={onCall}
+          />
+        ) : (
+          <EmptyState
+            icon="weather-sunny"
+            title={hasCallLogSignal ? 'All caught up' : 'Waiting for call history'}
+            body={
+              hasCallLogSignal
+                ? 'Nothing pressing right now — enjoy the quiet.'
+                : Platform.OS === 'android'
+                ? 'Once we have your call log we can spot dormant friendships.'
+                : "iOS doesn't expose call history — add contacts to see suggestions."
+            }
+          />
+        )}
+
+        {/* Scoreboard — the at-a-glance momentum strip. Bolder than a soft KPI
+            row: this is a B2C nudge, not a CRM dashboard. */}
         <View style={styles.statsRow}>
-          <Stat label="People" value={analysis?.counts?.total ?? 0} />
+          <Stat
+            label="Day streak"
+            value={stats?.currentStreakDays ?? 0}
+            icon="fire"
+            flame
+          />
           <Stat
             label="Dormant"
             value={analysis?.counts?.lostConnections ?? 0}
@@ -186,67 +240,11 @@ const HomeScreen = ({ navigation }) => {
           <>
             <SectionHeader
               title="Milestones"
-              caption="Small wins as you keep your circle warm"
+              caption="Rack up wins as you keep your circle warm"
             />
             <MilestonesCard milestones={milestones} />
           </>
         ) : null}
-
-        {!hasCallLogSignal && randomPerGroup.length > 0 ? (
-          <>
-            <SectionHeader
-              title="Say hi to someone today"
-              caption="No call history yet — here's a random person from each of your groups."
-            />
-            {randomPerGroup.map(({ profile: p, group }) => (
-              <ReconnectCard
-                key={`rand_${group?.id}_${p.contact.normalized}`}
-                profile={p}
-                onPress={() => onCardPress(p)}
-                onCall={() => onCall(p)}
-              />
-            ))}
-          </>
-        ) : null}
-
-        {/* iOS has no call history to derive reconnect suggestions from, so an
-            empty lane is just noise — hide the whole section unless we have
-            cards. Android keeps the soft empty state since its call log can
-            legitimately produce zero results. */}
-        {Platform.OS !== 'android' && (analysis?.reconnectToday || []).length === 0 ? null : (
-          <>
-            <SectionHeader
-              title="Reconnect today"
-              caption="Quietly nudging the relationships worth keeping warm"
-              actionLabel={
-                (analysis?.reconnectToday || []).length > 5 ? 'See all' : null
-              }
-              onActionPress={() => navigation.navigate('ConnectReconnect')}
-            />
-            {(analysis?.reconnectToday || []).length === 0 ? (
-              <EmptyState
-                icon="weather-sunny"
-                title={hasCallLogSignal ? 'All caught up' : 'Waiting for call history'}
-                body={
-                  hasCallLogSignal
-                    ? 'Nothing pressing right now — enjoy the quiet.'
-                    : Platform.OS === 'android'
-                    ? 'Once we have your call log we can spot dormant friendships.'
-                    : 'iOS doesn\'t expose call history — use the random picks above instead.'
-                }
-              />
-            ) : (
-              (analysis?.reconnectToday || []).slice(0, 5).map((p) => (
-                <ReconnectCard
-                  key={p.contact.normalized}
-                  profile={p}
-                  onPress={() => onCardPress(p)}
-                  onCall={() => onCall(p)}
-                />
-              ))
-            )}
-          </>
-        )}
 
         {/* Missed connections: people who called and we never called back. Same
             iOS/Android visibility rule as lost connections — iOS has no call
@@ -371,9 +369,33 @@ const HomeScreen = ({ navigation }) => {
   );
 };
 
-const Stat = ({ label, value, caption, highlight }) => (
-  <View style={[styles.statCard, highlight && styles.statCardHighlight]}>
-    <Text style={[styles.statValue, highlight && styles.statValueHighlight]}>{value}</Text>
+const Stat = ({ label, value, caption, highlight, flame, icon }) => (
+  <View
+    style={[
+      styles.statCard,
+      highlight && styles.statCardHighlight,
+      flame && value > 0 && styles.statCardFlame,
+    ]}
+  >
+    <View style={styles.statValueRow}>
+      {icon && value > 0 ? (
+        <Icon
+          name={icon}
+          size={20}
+          color={flame ? theme.colors.accent : theme.colors.text}
+          style={styles.statIcon}
+        />
+      ) : null}
+      <Text
+        style={[
+          styles.statValue,
+          highlight && styles.statValueHighlight,
+          flame && value > 0 && styles.statValueFlame,
+        ]}
+      >
+        {value}
+      </Text>
+    </View>
     <Text style={styles.statLabel}>
       {label}
       {caption ? <Text style={styles.statCaption}> {caption}</Text> : null}
@@ -394,32 +416,46 @@ const styles = StyleSheet.create({
   statsRow: {
     flexDirection: 'row',
     paddingHorizontal: theme.spacing.lg,
-    paddingTop: theme.spacing.md,
+    paddingTop: theme.spacing.lg,
     gap: theme.spacing.sm,
   },
   statCard: {
     flex: 1,
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.md,
-    padding: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    paddingHorizontal: theme.spacing.sm,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    marginRight: theme.spacing.sm,
+    alignItems: 'center',
   },
   statCardHighlight: {
     backgroundColor: theme.colors.surfaceAlt,
     borderColor: theme.colors.accent,
   },
+  statCardFlame: {
+    backgroundColor: '#FDEEE7',
+    borderColor: theme.colors.accent,
+  },
+  statValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statIcon: { marginRight: 4 },
   statValue: {
     fontSize: theme.font.h1,
-    fontWeight: '700',
+    fontWeight: '800',
     color: theme.colors.text,
   },
   statValueHighlight: {
     color: theme.colors.accent,
   },
+  statValueFlame: {
+    color: theme.colors.accent,
+  },
   statLabel: {
     fontSize: theme.font.small,
+    fontWeight: '600',
     color: theme.colors.textMuted,
     marginTop: 2,
   },

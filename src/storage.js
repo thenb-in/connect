@@ -119,6 +119,29 @@ export const getCallLogs = () => readJson(K.CALL_LOGS, []);
 
 export const setCallLogs = (logs) => writeJson(K.CALL_LOGS, logs || []);
 
+// Append a hand-entered call to the saved snapshot. Mirrors the slim shape the
+// engine reads (phoneNumber / timestamp / type / duration) and tags the row
+// `manual: true` so a full device re-import — which replaces the whole
+// snapshot — preserves it (see analysisService). Returns the stored entry, or
+// null when no usable number was supplied.
+export const addCallLog = ({ phoneNumber, type, timestamp, duration } = {}) => {
+  const entry = {
+    phoneNumber: (phoneNumber || '').toString().trim(),
+    timestamp: Number(timestamp) || Date.now(),
+    dateTime: null,
+    type: type || null,
+    duration: Math.max(0, parseInt(duration, 10) || 0),
+    manual: true,
+  };
+  if (!entry.phoneNumber) {
+    return null;
+  }
+  const logs = getCallLogs();
+  logs.unshift(entry);
+  setCallLogs(logs);
+  return entry;
+};
+
 export const getLastAnalyzedAt = () => storage.getNumber(K.LAST_ANALYZED_AT) || 0;
 
 export const setLastAnalyzedAt = (ms) =>

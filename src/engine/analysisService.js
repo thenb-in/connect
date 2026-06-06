@@ -117,7 +117,15 @@ export const refreshAnalysis = async (opts = {}) => {
       );
       if (Array.isArray(raw)) {
         const slim = raw.map(slimLog).filter((l) => l.phoneNumber);
-        callLogs = incremental ? mergeCallLogs(callLogs, slim) : slim;
+        // Hand-entered ("manual") rows aren't in the device call log, so a full
+        // (non-incremental) import would drop them. Carry them across so a user
+        // who logged a call by hand never loses it on a fresh re-import. In
+        // incremental mode the existing snapshot already holds them, and the
+        // merge below preserves them.
+        const manual = (callLogs || []).filter((l) => l?.manual);
+        callLogs = incremental
+          ? mergeCallLogs(callLogs, slim)
+          : mergeCallLogs(manual, slim);
         setCallLogs(callLogs);
       }
     } catch (err) {
