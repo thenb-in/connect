@@ -1,0 +1,18 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Connect app icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#357A9C"/>
+      <stop offset="1" stop-color="#1F4F6B"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Clean open "C" with rounded caps -->
+  <path d="M704 256
+           A300 300 0 1 0 768 580"
+        stroke="#F6F3EE" stroke-width="104" stroke-linecap="round" fill="none"/>
+  <!-- Terracotta "contact" node joining the ring at the lower opening -->
+  <circle cx="768" cy="580" r="92" fill="#E07856"/>
+  <!-- small inner cream dot — the spark of connection -->
+  <circle cx="768" cy="580" r="30" fill="#F6F3EE"/>
+</svg>

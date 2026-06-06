@@ -1,0 +1,11 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Connect logo mark">
+  <!-- Connect mark: an open "C" ring of connection, ends terminating in two people-nodes -->
+  <!-- Open C ring -->
+  <path d="M256 96
+           A160 160 0 1 0 416 256"
+        stroke="#2F6F8F" stroke-width="56" stroke-linecap="round" fill="none"/>
+  <!-- node A (top terminus) — the "you" node, cream on teal-friendly outline -->
+  <circle cx="256" cy="96" r="46" fill="#F6F3EE" stroke="#2F6F8F" stroke-width="14"/>
+  <!-- node B (right terminus) — the "them" node, terracotta accent -->
+  <circle cx="416" cy="256" r="46" fill="#E07856"/>
+</svg>

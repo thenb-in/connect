@@ -1,0 +1,22 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Connect app icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#357A9C"/>
+      <stop offset="1" stop-color="#1F4F6B"/>
+    </linearGradient>
+  </defs>
+  <!-- Full-bleed background (OS applies the rounded mask) -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Centered Connect mark, scaled up from the 512 grid (x2, centered) -->
+  <g transform="translate(0,0)">
+    <!-- Open C ring -->
+    <path d="M512 192
+             A320 320 0 1 0 832 512"
+          stroke="#F6F3EE" stroke-width="104" stroke-linecap="round" fill="none"/>
+    <!-- node A (top terminus) -->
+    <circle cx="512" cy="192" r="88" fill="#F6F3EE"/>
+    <!-- node B (right terminus) — terracotta accent -->
+    <circle cx="832" cy="512" r="88" fill="#E07856"/>
+  </g>
+</svg>
