@@ -45,19 +45,22 @@ export const sendWhatsAppMessage = async (phone, message = '') => {
     Alert.alert('Invalid number', 'No WhatsApp-able phone number on this contact.');
     return;
   }
-  // wa.me works without the leading "+".
-  const url = message
-    ? `https://wa.me/${digits}?text=${encodeURIComponent(message)}`
-    : `https://wa.me/${digits}`;
-  try {
-    const canOpen = await Linking.canOpenURL(url);
-    if (!canOpen) {
-      Alert.alert('WhatsApp not available', 'WhatsApp doesn\'t seem to be installed on this device.');
+  const text = message ? `&text=${encodeURIComponent(message)}` : '';
+
+  const candidates = [
+    `whatsapp://send?phone=${digits}${text}`,
+    // wa.me works without the leading "+".
+    message
+      ? `https://wa.me/${digits}?text=${encodeURIComponent(message)}`
+      : `https://wa.me/${digits}`,
+  ];
+  for (const url of candidates) {
+    try {
+      await Linking.openURL(url);
       return;
+    } catch (err) {
+      console.warn('[appShare] whatsapp open failed:', url, err?.message || err);
     }
-    await Linking.openURL(url);
-  } catch (err) {
-    console.warn('[appShare] whatsapp open failed:', err?.message || err);
-    Alert.alert('Could not open WhatsApp', err?.message || 'Please try again.');
   }
+  Alert.alert('WhatsApp not available', 'WhatsApp doesn\'t seem to be installed on this device.');
 };
