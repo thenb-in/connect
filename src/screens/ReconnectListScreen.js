@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl } from 'react-native';
-import { makeImmediateCall } from '../utils/makeImmediateCall';
+import { initiateTrackedCall } from '../utils/makeImmediateCall';
 import theme from '../theme';
 import AppHeader from '../components/AppHeader';
 import ReconnectCard from '../components/ReconnectCard';
@@ -8,7 +8,6 @@ import EmptyState from '../components/EmptyState';
 import ContactSearchBar from '../components/ContactSearchBar';
 import ConnectSetupGate from '../components/ConnectSetupGate';
 import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
-import { recordReconnect } from '../storage';
 
 /**
  * One screen that renders any of the engine's lanes. The variant is selected
@@ -86,8 +85,9 @@ const ReconnectListScreen = ({ navigation, route }) => {
   const onCall = useCallback((profile) => {
     const phone = profile?.contact?.phone;
     if (!phone) return;
-    recordReconnect(phone);
-    makeImmediateCall(phone).catch(() => {});
+    // Records a provisional reconnect, then the call monitor reconciles it with
+    // what actually happened (real duration, or removed if it never connected).
+    initiateTrackedCall(phone).catch(() => {});
   }, []);
 
   return (

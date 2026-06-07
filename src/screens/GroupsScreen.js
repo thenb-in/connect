@@ -21,6 +21,7 @@ import {
   CATEGORIES,
   CATEGORY_ID,
   deleteGroup,
+  getAdvancedMode,
   getDisplayGroups,
   getGroups,
   getLastCategorizedAt,
@@ -56,6 +57,12 @@ const GroupsScreen = ({ navigation, route }) => {
   // Settings → AI categorisation so this screen stays focused on the groups
   // themselves.
   const hasCategorised = useMemo(() => getLastCategorizedAt() > 0, [bump]);
+  // The auto-categorise card is only relevant to advanced users: those who've
+  // opted into advanced mode, or who already have an LLM key configured.
+  const canAutoCategorise = useMemo(
+    () => getAdvancedMode() || hasLlmKey(),
+    [bump]
+  );
   const memberCounts = useMemo(() => {
     const counts = {};
     Object.values(getContactGroupMap()).forEach((ids) => {
@@ -313,7 +320,7 @@ const GroupsScreen = ({ navigation, route }) => {
             </TouchableOpacity>
           </View>
         ) : null}
-        {!customiseMode && !hasCategorised ? (
+        {!customiseMode && !hasCategorised && canAutoCategorise ? (
           <View style={styles.recategoriseRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.recategoriseTitle}>

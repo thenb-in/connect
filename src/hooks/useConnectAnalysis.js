@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
+import { DeviceEventEmitter } from 'react-native';
 import {
   analyzeFromCache,
   refreshAnalysis,
   refreshAnalysisOnFocus,
 } from '../engine/analysisService';
+import { CALL_LOGS_UPDATED_EVENT } from '../utils/iosCallObserver';
 
 /**
  * Hook that exposes the latest Connect Mode analysis plus a refresh function.
@@ -56,6 +58,17 @@ export const useConnectAnalysis = (opts = {}) => {
   useEffect(() => {
     if (refreshOnMount) refresh();
   }, [refreshOnMount, refresh]);
+
+  // The iOS call observer writes the real duration (or removes a never-connected
+  // row) straight to MMKV when a call ends, then emits this event. Re-derive
+  // from cache (no device IO) so the UI reflects the monitored call immediately.
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(
+      CALL_LOGS_UPDATED_EVENT,
+      reanalyzeFromCache,
+    );
+    return () => sub.remove();
+  }, [reanalyzeFromCache]);
 
   return {
     analysis,

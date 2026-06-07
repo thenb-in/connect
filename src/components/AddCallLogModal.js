@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TextInput,
   FlatList,
+  ScrollView,
   TouchableOpacity,
   Modal,
 } from 'react-native';
@@ -48,6 +49,7 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
   const [query, setQuery] = useState('');
   const [timestamp, setTimestamp] = useState(() => Date.now());
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [contactPickerOpen, setContactPickerOpen] = useState(false);
 
   // Reset every field each time the sheet opens so a reopened form never
   // inherits stale input from a previous entry.
@@ -60,6 +62,7 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
     setQuery('');
     setTimestamp(Date.now());
     setPickerOpen(false);
+    setContactPickerOpen(false);
   } else if (!visible && wasVisible) {
     setWasVisible(false);
   }
@@ -75,13 +78,27 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
     return indexed.filter((row) => row.haystack.includes(q));
   }, [indexed, query]);
 
+  // Resolve a typed/picked number back to a saved contact name so we can echo
+  // "who" the number belongs to right under the input.
+  const nameByKey = useMemo(() => {
+    const map = new Map();
+    contacts.forEach((c) => {
+      if (c.normalized && !map.has(c.normalized)) {
+        map.set(c.normalized, c.name);
+      }
+    });
+    return map;
+  }, [contacts]);
+
   const selectedKey = normalizeLast10(number);
   const canSave = selectedKey.length > 0;
   const isMissed = type === 'MISSED';
+  const resolvedName = selectedKey ? nameByKey.get(selectedKey) : null;
 
   const onPickContact = useCallback((c) => {
     setNumber(c.phone || c.normalized || '');
     setQuery('');
+    setContactPickerOpen(false);
   }, []);
 
   const handleSave = useCallback(() => {
@@ -140,111 +157,94 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
           </TouchableOpacity>
         </View>
 
-        <FlatList
-          data={filtered}
-          keyExtractor={(r) => r.contact.normalized || r.contact.key}
-          renderItem={renderItem}
-          keyboardShouldPersistTaps="handled"
+        <ScrollView
           contentContainerStyle={{ paddingBottom: theme.spacing.lg }}
-          ListHeaderComponent={
-            <View>
-              <Text style={styles.sectionLabel}>Call type</Text>
-              <View style={styles.typeRow}>
-                {TYPES.map((t) => {
-                  const active = t.value === type;
-                  return (
-                    <TouchableOpacity
-                      key={t.value}
-                      style={[styles.typeChip, active && { borderColor: t.color, backgroundColor: theme.colors.surfaceAlt }]}
-                      onPress={() => setType(t.value)}
-                    >
-                      <Icon name={t.icon} size={18} color={active ? t.color : theme.colors.textSubtle} />
-                      <Text style={[styles.typeText, active && { color: t.color }]}>{t.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text style={styles.sectionLabel}>Call type</Text>
+          <View style={styles.typeRow}>
+            {TYPES.map((t) => {
+              const active = t.value === type;
+              return (
+                <TouchableOpacity
+                  key={t.value}
+                  style={[styles.typeChip, active && { borderColor: t.color, backgroundColor: theme.colors.surfaceAlt }]}
+                  onPress={() => setType(t.value)}
+                >
+                  <Icon name={t.icon} size={18} color={active ? t.color : theme.colors.textSubtle} />
+                  <Text style={[styles.typeText, active && { color: t.color }]}>{t.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
 
-              <Text style={styles.sectionLabel}>Phone number</Text>
-              <View style={styles.numberWrap}>
-                <Icon name="phone-outline" size={18} color={theme.colors.textSubtle} />
-                <TextInput
-                  style={styles.numberInput}
-                  placeholder="Enter or pick a number"
-                  placeholderTextColor={theme.colors.textSubtle}
-                  value={number}
-                  onChangeText={setNumber}
-                  keyboardType="phone-pad"
-                />
-                {number ? (
-                  <TouchableOpacity
-                    onPress={() => setNumber('')}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Icon name="close-circle" size={18} color={theme.colors.textSubtle} />
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-
-              {!isMissed ? (
-                <>
-                  <Text style={styles.sectionLabel}>Duration (minutes, optional)</Text>
-                  <View style={styles.numberWrap}>
-                    <Icon name="timer-outline" size={18} color={theme.colors.textSubtle} />
-                    <TextInput
-                      style={styles.numberInput}
-                      placeholder="0"
-                      placeholderTextColor={theme.colors.textSubtle}
-                      value={durationMin}
-                      onChangeText={(t) => setDurationMin(t.replace(/\D/g, ''))}
-                      keyboardType="number-pad"
-                    />
-                  </View>
-                </>
-              ) : null}
-
-              <Text style={styles.sectionLabel}>Date &amp; time</Text>
+          <Text style={styles.sectionLabel}>Phone number</Text>
+          <View style={styles.numberWrap}>
+            <Icon name="phone-outline" size={18} color={theme.colors.textSubtle} />
+            <TextInput
+              style={styles.numberInput}
+              placeholder="Enter or pick a number"
+              placeholderTextColor={theme.colors.textSubtle}
+              value={number}
+              onChangeText={setNumber}
+              keyboardType="phone-pad"
+            />
+            {number ? (
               <TouchableOpacity
-                style={styles.numberWrap}
-                onPress={() => setPickerOpen(true)}
+                onPress={() => setNumber('')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <Icon name="calendar-clock" size={18} color={theme.colors.textSubtle} />
-                <Text style={[styles.numberInput, styles.dateText]}>
-                  {formatTimestamp(timestamp)}
-                </Text>
-                <Icon name="chevron-down" size={18} color={theme.colors.textSubtle} />
+                <Icon name="close-circle" size={18} color={theme.colors.textSubtle} />
               </TouchableOpacity>
+            ) : null}
+            {/* Vertical divider separating the entry field from the contact
+                selector button on its right. */}
+            <View style={styles.fieldDivider} />
+            <TouchableOpacity
+              onPress={() => setContactPickerOpen(true)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={styles.contactsBtn}
+            >
+              <Icon name="account-search-outline" size={20} color={theme.colors.primary} />
+            </TouchableOpacity>
+          </View>
+          {/* Echo the saved contact name for the entered number, when we know it. */}
+          {resolvedName ? (
+            <View style={styles.resolvedRow}>
+              <Icon name="account-check-outline" size={14} color={theme.colors.success} />
+              <Text style={styles.resolvedText} numberOfLines={1}>{resolvedName}</Text>
+            </View>
+          ) : null}
 
-              <View style={styles.searchWrap}>
-                <Icon name="magnify" size={18} color={theme.colors.textSubtle} />
+          {!isMissed ? (
+            <>
+              <Text style={styles.sectionLabel}>Duration (minutes, optional)</Text>
+              <View style={styles.numberWrap}>
+                <Icon name="timer-outline" size={18} color={theme.colors.textSubtle} />
                 <TextInput
                   style={styles.numberInput}
-                  placeholder="Search contacts to pick a number…"
+                  placeholder="0"
                   placeholderTextColor={theme.colors.textSubtle}
-                  value={query}
-                  onChangeText={setQuery}
-                  autoCorrect={false}
-                  autoCapitalize="none"
+                  value={durationMin}
+                  onChangeText={(t) => setDurationMin(t.replace(/\D/g, ''))}
+                  keyboardType="number-pad"
                 />
-                {query ? (
-                  <TouchableOpacity
-                    onPress={() => setQuery('')}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Icon name="close-circle" size={18} color={theme.colors.textSubtle} />
-                  </TouchableOpacity>
-                ) : null}
               </View>
-            </View>
-          }
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Text style={styles.emptyText}>
-                {query ? 'No contacts match that search.' : 'No contacts to pick from.'}
-              </Text>
-            </View>
-          }
-        />
+            </>
+          ) : null}
+
+          <Text style={styles.sectionLabel}>Date &amp; time</Text>
+          <TouchableOpacity
+            style={styles.numberWrap}
+            onPress={() => setPickerOpen(true)}
+          >
+            <Icon name="calendar-clock" size={18} color={theme.colors.textSubtle} />
+            <Text style={[styles.numberInput, styles.dateText]}>
+              {formatTimestamp(timestamp)}
+            </Text>
+            <Icon name="chevron-down" size={18} color={theme.colors.textSubtle} />
+          </TouchableOpacity>
+        </ScrollView>
 
         <View style={[styles.footer, { paddingBottom: insets.bottom + theme.spacing.lg }]}>
           <TouchableOpacity
@@ -272,6 +272,65 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
             setPickerOpen(false);
           }}
         />
+
+        {/* Contact selector — opened from the button beside the phone field.
+            Tapping a contact fills the number and closes this sheet. */}
+        <Modal
+          visible={contactPickerOpen}
+          animationType="slide"
+          onRequestClose={() => setContactPickerOpen(false)}
+        >
+          <View style={styles.container}>
+            <View style={[styles.header, { paddingTop: insets.top + theme.spacing.md }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.title}>Pick a contact</Text>
+                <Text style={styles.subtitle}>Tap a contact to use their number.</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setContactPickerOpen(false)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Icon name="close" size={24} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.searchWrap}>
+              <Icon name="magnify" size={18} color={theme.colors.textSubtle} />
+              <TextInput
+                style={styles.numberInput}
+                placeholder="Search name, company, city, phone…"
+                placeholderTextColor={theme.colors.textSubtle}
+                value={query}
+                onChangeText={setQuery}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+              {query ? (
+                <TouchableOpacity
+                  onPress={() => setQuery('')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Icon name="close-circle" size={18} color={theme.colors.textSubtle} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <FlatList
+              data={filtered}
+              keyExtractor={(r) => r.contact.normalized || r.contact.key}
+              renderItem={renderItem}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: insets.bottom + theme.spacing.lg }}
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Text style={styles.emptyText}>
+                    {query ? 'No contacts match that search.' : 'No contacts to pick from.'}
+                  </Text>
+                </View>
+              }
+            />
+          </View>
+        </Modal>
       </View>
     </Modal>
   );
@@ -362,6 +421,29 @@ const styles = StyleSheet.create({
   },
   dateText: {
     paddingVertical: 2,
+  },
+  fieldDivider: {
+    width: 1,
+    alignSelf: 'stretch',
+    backgroundColor: theme.colors.border,
+    marginVertical: -theme.spacing.sm,
+    marginHorizontal: theme.spacing.sm,
+  },
+  contactsBtn: {
+    paddingHorizontal: theme.spacing.xs,
+  },
+  resolvedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: theme.spacing.lg,
+    marginTop: theme.spacing.sm,
+  },
+  resolvedText: {
+    marginLeft: 6,
+    fontSize: theme.font.small,
+    fontWeight: '600',
+    color: theme.colors.success,
+    flex: 1,
   },
   row: {
     flexDirection: 'row',

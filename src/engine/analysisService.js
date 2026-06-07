@@ -11,6 +11,7 @@ import {
   getGroups,
   getDontSuggestMap,
   setPermsState,
+  reconcileProvisionalCalls,
 } from '../storage';
 import { analyzeRelationships } from './relationshipEngine';
 import { loadPhoneBookContacts, ensureContactsPermission } from '../utils/phoneBook';
@@ -125,6 +126,11 @@ export const refreshAnalysis = async (opts = {}) => {
         callLogs = incremental
           ? mergeCallLogs(callLogs, slim)
           : mergeCallLogs(manual, slim);
+        // Now that the real device rows are in, collapse any optimistic
+        // provisional "tap" rows into their actual call-log entry so the
+        // monitored truth (real type/duration; missed/no-answer) replaces the
+        // guess instead of leaving a duplicate.
+        callLogs = reconcileProvisionalCalls(callLogs);
         setCallLogs(callLogs);
       }
     } catch (err) {

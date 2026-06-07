@@ -27,7 +27,7 @@ import {
   toggleDontSuggest,
 } from '../storage';
 import { reasonForProfile } from '../components/ReconnectCard';
-import { makeImmediateCall } from '../utils/makeImmediateCall';
+import { initiateTrackedCall } from '../utils/makeImmediateCall';
 import { sendWhatsAppMessage } from '../utils/appShare';
 import { formatShortDateTime, formatDuration } from '../utils/dateUtils';
 
@@ -114,8 +114,9 @@ const ContactDetailScreen = ({ navigation, route }) => {
 
   const onCall = useCallback(() => {
     if (!contactPhone) return;
-    recordReconnect(contactPhone);
-    makeImmediateCall(contactPhone).catch(() => {});
+    // Records a provisional reconnect, then the call monitor reconciles it with
+    // what actually happened (real duration, or removed if it never connected).
+    initiateTrackedCall(contactPhone).catch(() => {});
   }, [contactPhone]);
 
   const onMessage = useCallback(() => {

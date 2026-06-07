@@ -8,8 +8,8 @@ import ReconnectCard from '../components/ReconnectCard';
 import EmptyState from '../components/EmptyState';
 import ConnectSetupGate from '../components/ConnectSetupGate';
 import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
-import { getDisplayGroups, recordReconnect, UNKNOWN_GROUP_ID } from '../storage';
-import { makeImmediateCall } from '../utils/makeImmediateCall';
+import { getDisplayGroups, UNKNOWN_GROUP_ID } from '../storage';
+import { initiateTrackedCall } from '../utils/makeImmediateCall';
 
 /**
  * Shows every contact tagged with a single group, ordered by reconnect
@@ -54,8 +54,9 @@ const GroupDetailScreen = ({ navigation, route }) => {
   const onCall = useCallback((profile) => {
     const phone = profile?.contact?.phone;
     if (!phone) return;
-    recordReconnect(phone);
-    makeImmediateCall(phone).catch(() => {});
+    // Records a provisional reconnect, then the call monitor reconciles it with
+    // what actually happened (real duration, or removed if it never connected).
+    initiateTrackedCall(phone).catch(() => {});
   }, []);
 
   return (

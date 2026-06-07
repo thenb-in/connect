@@ -505,37 +505,6 @@ const SettingsScreen = ({ navigation }) => {
 
         {advancedMode ? (
         <>
-        {Platform.OS === 'ios' ? (
-          <>
-            <Text style={styles.sectionLabel}>Home screen</Text>
-            <View style={styles.card}>
-              <TouchableOpacity
-                style={styles.row}
-                onPress={() => onToggleShowHiddenCards(!showHiddenCards)}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
-                  <Icon name="eye-outline" size={20} color={theme.colors.primary} />
-                </View>
-                <View style={styles.rowBody}>
-                  <Text style={styles.rowTitle}>Show hidden cards</Text>
-                  <Text style={styles.rowSubtitle}>
-                    iOS hides the call-history cards (like Missed connections)
-                    when they have no data. Turn this on to always show them.
-                  </Text>
-                </View>
-                <View pointerEvents="none" style={styles.switchWrap}>
-                  <Switch
-                    value={showHiddenCards}
-                    onValueChange={onToggleShowHiddenCards}
-                    trackColor={{ true: theme.colors.primary }}
-                  />
-                </View>
-              </TouchableOpacity>
-            </View>
-          </>
-        ) : null}
-
         <Text style={styles.sectionLabel}>
           AI categorisation
         </Text>
@@ -659,6 +628,37 @@ const SettingsScreen = ({ navigation }) => {
             />
           </TouchableOpacity>
         </View>
+
+        {Platform.OS === 'ios' ? (
+          <>
+            <Text style={styles.sectionLabel}>Home screen</Text>
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.row}
+                onPress={() => onToggleShowHiddenCards(!showHiddenCards)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+                  <Icon name="eye-outline" size={20} color={theme.colors.primary} />
+                </View>
+                <View style={styles.rowBody}>
+                  <Text style={styles.rowTitle}>Show hidden cards</Text>
+                  <Text style={styles.rowSubtitle}>
+                    iOS hides the call-history cards (like Missed connections)
+                    when they have no data. Turn this on to always show them.
+                  </Text>
+                </View>
+                <View pointerEvents="none" style={styles.switchWrap}>
+                  <Switch
+                    value={showHiddenCards}
+                    onValueChange={onToggleShowHiddenCards}
+                    trackColor={{ true: theme.colors.primary }}
+                  />
+                </View>
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : null}
         </>
         ) : null}
 

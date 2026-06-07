@@ -132,6 +132,12 @@ export const setCallLogs = (logs) => writeJson(K.CALL_LOGS, logs || []);
 // default), 'system' for app-recorded reconnect taps. `connected` can be forced
 // (system reconnect rows are connected with a blank duration); when omitted it
 // falls back to the app-wide "lasted over a minute" rule.
+//
+// Call-monitoring fields (all optional, the engine ignores them):
+//   callId      links a tapped call to its dialer entry and final monitored
+//               result so the iOS CXCallObserver can fill in / remove the row.
+//   provisional true for an optimistic "tap" row awaiting monitor correction.
+//   source      'tap' | 'callkit' | 'calllog' | 'manual' — audit of origin.
 export const addCallLog = ({
   phoneNumber,
   type,
@@ -139,6 +145,9 @@ export const addCallLog = ({
   duration,
   connected,
   madeBy = 'user',
+  callId = null,
+  provisional = false,
+  source = null,
 } = {}) => {
   const hasDuration = duration !== null && duration !== undefined && duration !== '';
   const durationSec = hasDuration ? Math.max(0, parseInt(duration, 10) || 0) : null;
@@ -153,6 +162,9 @@ export const addCallLog = ({
     connected: typeof connected === 'boolean' ? connected : durationSec > 60,
     madeBy,
     manual: true,
+    callId,
+    provisional: Boolean(provisional),
+    source,
   };
   if (!entry.phoneNumber) {
     return null;
@@ -173,6 +185,59 @@ export const deleteCallLogAt = (index) => {
   logs.splice(index, 1);
   setCallLogs(logs);
   return true;
+};
+
+// ---------- Call monitoring: provisional rows ----------
+// A "tap" writes a provisional, optimistic OUTGOING/connected row immediately so
+// the UI feels responsive. The call monitor (iOS CXCallObserver, or the Android
+// device call-log import) then reconciles it against what actually happened:
+// filling in the real duration, or removing the row if the call never connected.
+
+// Patch the call-log row carrying `callId`. Returns true when a row was updated.
+export const updateCallByCallId = (callId, patch = {}) => {
+  if (!callId) { return false; }
+  const logs = getCallLogs();
+  const idx = logs.findIndex((l) => l?.callId === callId);
+  if (idx === -1) { return false; }
+  logs[idx] = { ...logs[idx], ...patch };
+  setCallLogs(logs);
+  return true;
+};
+
+// Remove the call-log row carrying `callId`. Returns true when one was removed.
+export const removeCallByCallId = (callId) => {
+  if (!callId) { return false; }
+  const logs = getCallLogs();
+  const next = logs.filter((l) => l?.callId !== callId);
+  if (next.length === logs.length) { return false; }
+  setCallLogs(next);
+  return true;
+};
+
+// How close (in ms) a real device call-log row must be to a provisional tap row,
+// for the same number, to be considered the same call. The device writes the row
+// at the actual call start, a beat or two after the tap.
+const PROVISIONAL_MATCH_WINDOW_MS = 3 * 60 * 1000;
+
+// Pure: drop provisional rows that a real (non-provisional) row for the same
+// number now supersedes. Used after a device call-log import so the optimistic
+// tap row collapses into the real entry (correct type/duration; missed/no-answer
+// reflected) instead of leaving a duplicate. Returns a new array.
+export const reconcileProvisionalCalls = (logs) => {
+  const list = Array.isArray(logs) ? logs : [];
+  const real = list.filter((l) => l && !l.provisional);
+  return list.filter((log) => {
+    if (!log?.provisional) { return true; }
+    const key = normalizeLast10(log.phoneNumber);
+    if (!key) { return true; }
+    const ts = getLogTimestamp(log);
+    const superseded = real.some((r) => {
+      if (normalizeLast10(r.phoneNumber) !== key) { return false; }
+      const rts = getLogTimestamp(r);
+      return ts && rts && Math.abs(rts - ts) <= PROVISIONAL_MATCH_WINDOW_MS;
+    });
+    return !superseded;
+  });
 };
 
 export const getLastAnalyzedAt = () => storage.getNumber(K.LAST_ANALYZED_AT) || 0;
@@ -478,6 +543,28 @@ export const recordReconnect = (phone, ts = Date.now()) => {
       duration: null,
       connected: true,
       madeBy: 'system',
+    }),
+  );
+};
+
+// Optimistically record a tapped call as a provisional, connected reconnect row
+// tagged with `callId`. The call monitor later corrects its duration or removes
+// it (see updateCallByCallId / removeCallByCallId / reconcileProvisionalCalls).
+// Returns true when a row was written.
+export const recordProvisionalCall = (phone, callId, ts = Date.now()) => {
+  const key = normalizeLast10(phone);
+  if (!key) { return false; }
+  return Boolean(
+    addCallLog({
+      phoneNumber: phone,
+      type: 'OUTGOING',
+      timestamp: ts,
+      duration: null,
+      connected: true,
+      madeBy: 'system',
+      callId,
+      provisional: true,
+      source: 'tap',
     }),
   );
 };

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Provider as PaperProvider } from 'react-native-paper';
@@ -7,6 +7,7 @@ import Toast from 'react-native-toast-message';
 import ConnectStack from './src/navigation/ConnectStack';
 import theme from './src/theme';
 import { testMMKV } from './src/mmkv';
+import { startIosCallObserver } from './src/utils/iosCallObserver';
 
 testMMKV();
 
@@ -26,17 +27,25 @@ const ToastOverlay = () => {
   return <Toast topOffset={insets.top + HEADER_HEIGHT + 8} />;
 };
 
-const App = () => (
-  <SafeAreaProvider>
-    <PaperProvider theme={paperTheme}>
-      <NavigationContainer>
-        <SafeAreaView edges={[]} style={{ flex: 1, backgroundColor: theme.colors.background }}>
-          <ConnectStack />
-          <ToastOverlay />
-        </SafeAreaView>
-      </NavigationContainer>
-    </PaperProvider>
-  </SafeAreaProvider>
-);
+const App = () => {
+  // Start monitoring cellular calls via CallKit (iOS only; no-op elsewhere) so
+  // tapped calls record their real duration / connected state.
+  useEffect(() => {
+    startIosCallObserver();
+  }, []);
+
+  return (
+    <SafeAreaProvider>
+      <PaperProvider theme={paperTheme}>
+        <NavigationContainer>
+          <SafeAreaView edges={[]} style={{ flex: 1, backgroundColor: theme.colors.background }}>
+            <ConnectStack />
+            <ToastOverlay />
+          </SafeAreaView>
+        </NavigationContainer>
+      </PaperProvider>
+    </SafeAreaProvider>
+  );
+};
 
 export default App;

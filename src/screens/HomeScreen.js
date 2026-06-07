@@ -15,7 +15,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import AppHeader from '../components/AppHeader';
-import { makeImmediateCall } from '../utils/makeImmediateCall';
+import { initiateTrackedCall } from '../utils/makeImmediateCall';
 import ReconnectCard from '../components/ReconnectCard';
 import { SpotlightCard, UpNextRow } from '../components/SpotlightHero';
 import SectionHeader from '../components/SectionHeader';
@@ -26,7 +26,6 @@ import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
 import { useMilestones } from '../hooks/useMilestones';
 import {
   getLastAnalyzedAt,
-  recordReconnect,
   CATEGORIES,
   WANT_TO_CONNECT_GROUP_ID,
   getShowHiddenCards,
@@ -176,8 +175,9 @@ const HomeScreen = ({ navigation }) => {
   const onCall = useCallback((profile) => {
     const phone = profile?.contact?.phone;
     if (!phone) return;
-    recordReconnect(phone);
-    makeImmediateCall(phone).catch(() => {});
+    // Records a provisional reconnect, then the call monitor reconciles it with
+    // what actually happened (real duration, or removed if it never connected).
+    initiateTrackedCall(phone).catch(() => {});
   }, []);
 
   return (
