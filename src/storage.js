@@ -10,11 +10,25 @@ import bundledMilestones from './data/milestones.json';
 const K = {
   ONBOARDED: 'connect.onboarded',
   SETUP_COMPLETED: 'connect.setupCompleted',
+  // Pre-work onboarding decisions so a mid-setup app kill doesn't drop the user
+  // back at the welcome splash or re-prompt a step they already skipped. Stores
+  // { started, llmState, contextState } only — the work stage (clustering →
+  // choose-who → analyse) is deliberately NOT tracked here so it restarts clean
+  // on resume rather than being marked done before setup actually finished.
+  // Cleared once setup completes and by a full data wipe (clearConnectStorage
+  // walks every key here).
+  ONBOARDING_PROGRESS: 'connect.onboardingProgress',
   CONTACTS: 'connect.contacts',
   CALL_LOGS: 'connect.callLogs',
   LAST_ANALYZED_AT: 'connect.lastAnalyzedAt',
   GROUPS: 'connect.groups',
   CONTACT_GROUPS: 'connect.contactGroups',
+  // Name-token clusters the user picked during onboarding's local clustering
+  // step ("keywords you relate to" — recurring surnames/first names). Stored
+  // as `[{ id, name, token, count, members:[normalizedPhone] }]`. These seed
+  // the merge/delete review that turns them into real groups, and are kept so
+  // the selection survives a re-run / can be revisited later.
+  SELECTED_CLUSTERS: 'connect.selectedClusters',
   // Milestone definitions (achievements like "connect with 25 people" or a
   // "7-day streak"). These ship bundled in src/data/milestones.json and can
   // later be overwritten by a webserver payload via setMilestoneDefinitions.
@@ -22,6 +36,11 @@ const K = {
   // achievedAt timestamp, so an earned badge survives a streak later lapsing.
   MILESTONE_DEFS: 'connect.milestoneDefs',
   MILESTONES_STATE: 'connect.milestonesState',
+  // Forward-only cutoff for milestone progress: a timestamp stamped the first
+  // time milestones are read, so achievements reward reconnecting from when the
+  // user starts using the app rather than their imported call history. Only
+  // connected calls at or after this count toward streaks / people / weekly.
+  MILESTONE_SINCE: 'connect.milestoneSince',
   // Phones (normalised, last-10) whose group memberships the user has
   // edited by hand. The categoriser skips these on re-runs so manual
   // corrections never get overwritten by the LLM.
@@ -101,6 +120,23 @@ export const isSetupCompleted = () => Boolean(storage.getBoolean(K.SETUP_COMPLET
 export const setSetupCompleted = (value) =>
   storage.set(K.SETUP_COMPLETED, Boolean(value));
 
+// Persisted onboarding progress so a returning user who killed the app
+// mid-setup lands back on the step they reached instead of the welcome splash.
+// Null until onboarding starts; cleared when setup completes and by a full
+// data wipe. The shape is owned by OnboardingScreen — storage just stows it.
+export const getOnboardingProgress = () => readJson(K.ONBOARDING_PROGRESS, null);
+
+export const setOnboardingProgress = (progress) => {
+  if (!progress) {
+    storage.delete(K.ONBOARDING_PROGRESS);
+    return;
+  }
+  writeJson(K.ONBOARDING_PROGRESS, progress);
+};
+
+export const clearOnboardingProgress = () =>
+  storage.delete(K.ONBOARDING_PROGRESS);
+
 export const getPermsState = () =>
   readJson(K.PERMS, { contacts: 'unknown', callLog: 'unknown' });
 
@@ -113,6 +149,16 @@ export const setPermsState = (next) => writeJson(K.PERMS, next);
 export const getContacts = () => readJson(K.CONTACTS, []);
 
 export const setContacts = (contacts) => writeJson(K.CONTACTS, contacts || []);
+
+// ---------- Selected name-token clusters (onboarding "keywords") ----------
+// The clusters the user picked in the local-clustering onboarding step. Each
+// entry keeps its members so the proposal review can rebuild groups without
+// re-running the clusterer.
+
+export const getSelectedClusters = () => readJson(K.SELECTED_CLUSTERS, []);
+
+export const setSelectedClusters = (clusters) =>
+  writeJson(K.SELECTED_CLUSTERS, clusters || []);
 
 // ---------- Call logs (raw, lightweight cache) ----------
 // We only persist the fields the relationship engine needs so the snapshot
@@ -173,6 +219,19 @@ export const addCallLog = ({
   logs.unshift(entry);
   setCallLogs(logs);
   return entry;
+};
+
+// Patch a single saved call log by its index in the stored snapshot (e.g. to
+// manually correct its `connected` status from the call-log viewer). Returns
+// true when an entry was updated, false when the index was out of range.
+export const updateCallLogAt = (index, patch = {}) => {
+  const logs = getCallLogs();
+  if (index < 0 || index >= logs.length) {
+    return false;
+  }
+  logs[index] = { ...logs[index], ...patch };
+  setCallLogs(logs);
+  return true;
 };
 
 // Remove a single saved call log by its index in the stored snapshot. Returns
@@ -575,6 +634,12 @@ export const recordProvisionalCall = (phone, callId, ts = Date.now()) => {
 export const getReconnects = () => {
   const map = {};
   (getCallLogs() || []).forEach((log) => {
+    // Provisional rows are optimistic "tap" guesses awaiting reconciliation by
+    // the iOS call monitor or an Android import. Don't count them as a confirmed
+    // reconnect — an unanswered tap that the monitor later removes (or never
+    // resolves) would otherwise inflate reconnect/milestone counts forever. Once
+    // reconciled, the row is non-provisional and counts here.
+    if (log?.provisional) { return; }
     if (!isLogConnected(log)) { return; }
     const key = normalizeLast10(log?.phoneNumber);
     if (!key) { return; }
@@ -583,6 +648,41 @@ export const getReconnects = () => {
     if (!map[key] || ts > map[key]) { map[key] = ts; }
   });
   return map;
+};
+
+// The forward-only milestone cutoff. Lazily stamped to "now" the first time it
+// is read so a returning user's imported call history never backfills
+// achievements — only calls from when they start using Connect count. Persisted
+// in MMKV so the cutoff survives restarts and call-log re-imports.
+const getMilestoneSince = () => {
+  let since = storage.getNumber(K.MILESTONE_SINCE) || 0;
+  if (!since) {
+    since = Date.now();
+    storage.set(K.MILESTONE_SINCE, since);
+  }
+  return since;
+};
+
+// Every connected call (any direction) at or after the milestone cutoff, as a
+// flat list of { phone, ts } — one entry per call, NOT collapsed per person, so
+// the milestones engine can measure real per-day streaks. Provisional taps are
+// excluded until the monitor/import confirms them (same rule as getReconnects).
+// This is the milestones counterpart to getReconnects: the latter keeps the
+// newest connected call per number (for the "recently reconnected" lane), this
+// keeps every connected call (for streak / people / weekly progress).
+export const getReconnectEvents = () => {
+  const since = getMilestoneSince();
+  const out = [];
+  (getCallLogs() || []).forEach((log) => {
+    if (log?.provisional) { return; }
+    if (!isLogConnected(log)) { return; }
+    const ts = getLogTimestamp(log);
+    if (!ts || ts < since) { return; }
+    const phone = normalizeLast10(log?.phoneNumber);
+    if (!phone) { return; }
+    out.push({ phone, ts });
+  });
+  return out;
 };
 
 // ---------- Milestones ----------
@@ -975,7 +1075,7 @@ const SCOPE_KEYS = {
   contacts: [K.CONTACTS, K.DONT_SUGGEST],
   notes: [K.NOTES],
   goals: [K.GOALS],
-  milestones: [K.MILESTONE_DEFS, K.MILESTONES_STATE],
+  milestones: [K.MILESTONE_DEFS, K.MILESTONES_STATE, K.MILESTONE_SINCE],
   userProfile: [K.USER_PROFILE],
 };
 

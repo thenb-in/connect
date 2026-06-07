@@ -17,6 +17,13 @@ const CATEGORY_BY_ID = Object.fromEntries(CATEGORIES.map((c) => [c.id, c]));
 const FALLBACK_CATEGORY = { id: 'unknown', name: 'Unknown', color: theme.colors.textSubtle };
 const categoryFor = (id) => CATEGORY_BY_ID[id] || FALLBACK_CATEGORY;
 
+// Categories offered when the user marks a proposed group's category in the
+// local-onboarding review (step 2). Unknown is the unsorted default and
+// Helpers are filtered out before clustering, so neither is offered here.
+const RECATEGORISE_CATEGORIES = CATEGORIES.filter(
+  (c) => c.id !== 'unknown' && c.id !== 'helpers',
+);
+
 const groupSignature = (g) =>
   `${(g.categoryId || 'unknown').toLowerCase()}::${(g.name || '').trim().toLowerCase()}`;
 
@@ -83,6 +90,11 @@ const CategoriseProposalModal = ({
   onCustomise,
   onCancel,
   showCustomise = true,
+  // When true, hide the pipeline/debug tabs (Local / Sent / LLM reply /
+  // Transform) and show only the editable "Proposed" list. Used by the local
+  // onboarding flow, where there's no LLM trace to inspect — the modal is
+  // purely a merge/delete nudge before the picked clusters become groups.
+  proposedOnly = false,
 }) => {
   // Set on the pending proposal by useRecategorise — drives the constrained
   // UI: no "add custom group" button, different "Proposed" subtitle. The
@@ -97,7 +109,7 @@ const CategoriseProposalModal = ({
   const [addCategoryId, setAddCategoryId] = useState('friends');
   // Inspection tabs. Default to Local so the user lands on the pipeline
   // explanation before the proposed-groups editor.
-  const [tabId, setTabId] = useState('local');
+  const [tabId, setTabId] = useState(proposedOnly ? 'proposed' : 'local');
   const [expandedGroupId, setExpandedGroupId] = useState(null);
   const [showAllCards, setShowAllCards] = useState({});
   // Index of the proposed group the user is merging FROM. While non-null the
@@ -117,14 +129,14 @@ const CategoriseProposalModal = ({
       setAddOpen(false);
       setAddName('');
       setAddCategoryId('friends');
-      setTabId('local');
+      setTabId(proposedOnly ? 'proposed' : 'local');
       setExpandedGroupId(null);
       setShowAllCards({});
       setLocalSearch('');
       setMergeSourceIdx(null);
       setHistory([]);
     }
-  }, [visible, proposal]);
+  }, [visible, proposal, proposedOnly]);
 
   const trace = proposal?.trace;
   // Phone → name lookup so a proposed group's phone-keyed members can be
@@ -200,6 +212,20 @@ const CategoriseProposalModal = ({
     setAddOpen(false);
   }, [addName, addCategoryId, groups, pushHistory]);
 
+  // Mark a proposed group's category (local-onboarding step 2). Snapshots
+  // history so it's undoable; the list re-sections on the next render so the
+  // group hops to its new category's section.
+  const handleSetCategory = useCallback(
+    (index, categoryId) => {
+      if (groups[index]?.categoryId === categoryId) return;
+      pushHistory();
+      setGroups(
+        groups.map((g, i) => (i === index ? { ...g, categoryId } : g)),
+      );
+    },
+    [groups, pushHistory],
+  );
+
   // Revert the most recent edit (merge / remove / add).
   const handleUndo = useCallback(() => {
     if (!history.length) return;
@@ -243,6 +269,9 @@ const CategoriseProposalModal = ({
         ? ` · ${dropped} dropped`
         : '';
       return `${steps.length} ${steps.length === 1 ? 'group' : 'groups'} reshaped into ${groups.length} proposed${droppedSuffix}.`;
+    }
+    if (proposedOnly) {
+      return `Tap a category under each group to file it, then merge or remove any you don't want.`;
     }
     if (isEdited) {
       return `${groups.length} groups · ~${totalMembers} contacts tagged.`;
@@ -741,6 +770,7 @@ const CategoriseProposalModal = ({
           <Text style={styles.title}>Categorisation review</Text>
           <Text style={styles.subtitle}>{subtitleForTab()}</Text>
 
+          {proposedOnly ? null : (
           <View style={styles.tabBar}>
             {TABS.map((t) => (
               <TouchableOpacity
@@ -761,6 +791,7 @@ const CategoriseProposalModal = ({
               </TouchableOpacity>
             ))}
           </View>
+          )}
 
           <ScrollView
             style={styles.list}
@@ -810,34 +841,39 @@ const CategoriseProposalModal = ({
               // workplaces from the questionnaire) are protected — they can be
               // neither a merge source nor a target.
               const nonBaseCount = groups.filter((g) => !g.isBase).length;
-              const sections = CATEGORIES.map((cat) => ({
-                cat,
-                items: indexed.filter(({ g }) => (g.categoryId || 'unknown') === cat.id),
-              }))
-                .concat([
-                  {
-                    cat: FALLBACK_CATEGORY,
+              // Local-onboarding review (step 2): one flat, stable list — no
+              // category sections. Marking a group's category just updates its
+              // chip + dot in place; the group never jumps to a different
+              // section. The LLM flow keeps the per-category sectioning.
+              const sections = proposedOnly
+                ? [{ cat: null, items: indexed }]
+                : CATEGORIES.map((cat) => ({
+                    cat,
                     items: indexed.filter(
-                      ({ g }) => !CATEGORY_BY_ID[g.categoryId || 'unknown'],
+                      ({ g }) => (g.categoryId || 'unknown') === cat.id,
                     ),
-                  },
-                ])
-                .filter((s) => s.items.length);
+                  }))
+                    .concat([
+                      {
+                        cat: FALLBACK_CATEGORY,
+                        items: indexed.filter(
+                          ({ g }) => !CATEGORY_BY_ID[g.categoryId || 'unknown'],
+                        ),
+                      },
+                    ])
+                    .filter((s) => s.items.length);
 
               return sections.map(({ cat, items }) => {
                 const totalInCat = items.reduce(
                   (acc, { g }) => acc + (g.members?.length || 0),
                   0,
                 );
-                // Always show the colored category header so every category is
-                // clearly delimited. Single-group categories (Family, Helpers)
-                // otherwise rendered as a lone row with no header, bleeding
-                // into the previous section — e.g. a relatives "Family" row
-                // sitting right under the Friends groups looked like it was
-                // categorised as a friend (its gold dot was the only cue).
-                const showHeader = true;
+                // Show the colored category header in the sectioned (LLM) flow
+                // so each category is clearly delimited. The flat proposedOnly
+                // list has no sections, so no header.
+                const showHeader = cat != null;
                 return (
-                  <View key={cat.id}>
+                  <View key={cat ? cat.id : 'all'}>
                     {showHeader ? (
                       <View style={styles.sectionHeader}>
                         <View style={[styles.sectionDot, { backgroundColor: cat.color }]} />
@@ -868,7 +904,12 @@ const CategoriseProposalModal = ({
                             onPress={() => handleMerge(mergeSourceIdx, idx)}
                             activeOpacity={0.7}
                           >
-                            <View style={[styles.dot, { backgroundColor: cat.color }]} />
+                            <View
+                              style={[
+                                styles.dot,
+                                { backgroundColor: categoryFor(g.categoryId).color },
+                              ]}
+                            />
                             <View style={{ flex: 1 }}>
                               <Text style={styles.rowName} numberOfLines={1}>
                                 {g.name}
@@ -883,11 +924,18 @@ const CategoriseProposalModal = ({
                       }
 
                       return (
+                        // Key is category-independent so marking a category
+                        // updates the row in place instead of remounting it.
+                        <View key={rowKey} style={styles.groupBlock}>
                         <View
-                          key={`${groupSignature(g)}-${idx}`}
-                          style={[styles.row, isMergeSource && styles.rowMergeSource]}
+                          style={[styles.row, styles.rowFlush, isMergeSource && styles.rowMergeSource]}
                         >
-                          <View style={[styles.dot, { backgroundColor: cat.color }]} />
+                          <View
+                            style={[
+                              styles.dot,
+                              { backgroundColor: categoryFor(g.categoryId).color },
+                            ]}
+                          />
                           <TouchableOpacity
                             style={{ flex: 1 }}
                             activeOpacity={0.7}
@@ -934,6 +982,40 @@ const CategoriseProposalModal = ({
                               </TouchableOpacity>
                             </>
                           ) : null}
+                        </View>
+                        {/* Step 2 of local onboarding: mark this group's
+                            category. Base groups (declared workplaces) keep
+                            theirs; hidden while picking a merge target. */}
+                        {proposedOnly && !isBase && mergeSourceIdx === null ? (
+                          <View style={styles.catPickerRow}>
+                            {RECATEGORISE_CATEGORIES.map((rc) => {
+                              const active =
+                                (g.categoryId || 'unknown') === rc.id;
+                              return (
+                                <TouchableOpacity
+                                  key={rc.id}
+                                  onPress={() => handleSetCategory(idx, rc.id)}
+                                  style={[
+                                    styles.categoryChip,
+                                    active && {
+                                      backgroundColor: rc.color,
+                                      borderColor: rc.color,
+                                    },
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.categoryChipText,
+                                      active && { color: theme.colors.surface },
+                                    ]}
+                                  >
+                                    {rc.name}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        ) : null}
                         </View>
                       );
                     })}
@@ -1257,6 +1339,20 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.xs,
     borderWidth: 1,
     borderColor: theme.colors.border,
+  },
+  // Wraps a proposed group's row + its category picker as one block; the gap
+  // between groups lives here so the row can sit flush above its picker.
+  groupBlock: {
+    marginBottom: theme.spacing.xs,
+  },
+  rowFlush: {
+    marginBottom: 0,
+  },
+  catPickerRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: theme.spacing.xs,
+    marginLeft: 18,
   },
   dot: {
     width: 10,

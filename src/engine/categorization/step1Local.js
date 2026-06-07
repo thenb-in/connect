@@ -1,4 +1,4 @@
-import { declaredOffices, normaliseCompanyKey, tokens } from './shared';
+import { declaredOffices, normaliseCompanyKey, rawTokens, tokens } from './shared';
 
 // ---- Tuning constants ----------------------------------------------------
 // Decisions that were previously inline magic numbers, hoisted here so every
@@ -114,21 +114,32 @@ const NAME_TOKEN_SOURCES = [
 // LAST_NAME_MIN_MEMBERS distinct contacts share the token, so we don't
 // manufacture noise.
 const clusterByNameTokens = (contacts) => {
-  // token -> { members: Set<phone>, sources: Set<string> }
+  // token -> { members: Set<phone>, sources: Set<string>, caps: string|null }
   const byToken = new Map();
   contacts.forEach((c) => {
     const ts = tokens(c?.name);
     if (ts.length < MIN_NAME_TOKENS_TO_CLUSTER) return;
+    // Original-cased tokens, aligned index-for-index with `ts`, so we can
+    // recover how a matched token was actually spelled in the address book.
+    const raw = rawTokens(c?.name);
     NAME_TOKEN_SOURCES.forEach(({ source, pick, stop }) => {
       const token = pick(ts);
       if (!token || token.length < MIN_CLUSTER_TOKEN_LENGTH) return;
       if (stop && stop.has(token)) return;
       if (!byToken.has(token)) {
-        byToken.set(token, { members: new Set(), sources: new Set() });
+        byToken.set(token, { members: new Set(), sources: new Set(), caps: null });
       }
       const entry = byToken.get(token);
       entry.members.add(c.normalized);
       entry.sources.add(source);
+      // Caps take preference on screen: matching stays case-insensitive, but
+      // if ANY contact wrote this token entirely in capitals (e.g. "IITB",
+      // "NRI") we keep that all-caps spelling for display rather than
+      // title-casing it. First all-caps spelling seen wins.
+      const rawToken = pick(raw);
+      if (!entry.caps && rawToken && rawToken === rawToken.toUpperCase()) {
+        entry.caps = rawToken;
+      }
     });
   });
   const out = {};
@@ -137,10 +148,12 @@ const clusterByNameTokens = (contacts) => {
   // contacts happened to appear in the address book.
   const sortedTokens = [...byToken.keys()].sort((a, b) => a.localeCompare(b));
   sortedTokens.forEach((token) => {
-    const { members, sources } = byToken.get(token);
+    const { members, sources, caps } = byToken.get(token);
     if (members.size < LAST_NAME_MIN_MEMBERS) return;
     const id = `cluster-${token}`;
-    const titled = token.charAt(0).toUpperCase() + token.slice(1);
+    // An all-caps spelling, if any contact used one, beats the default
+    // title-case ("iitb"/"IITB" → "IITB"; "rao" → "Rao").
+    const titled = caps || token.charAt(0).toUpperCase() + token.slice(1);
     const fromFirst = sources.has('first name');
     const fromLast = sources.has('last name');
     const source =
@@ -211,7 +224,7 @@ export const buildCandidateClusters = ({ contacts }) => {
 // whose company field matches a DECLARED workplace are claimed here; a
 // company that matches no declared workplace is left for the LLM, which may
 // still cluster it into its own "Office – <X>" group.
-const isHelperContact = (c) => {
+export const isHelperContact = (c) => {
   const haystack = `${c?.note || ''} ${c?.label || ''} ${c?.name || ''}`;
   return HELPER_KEYWORD_RE.test(haystack);
 };

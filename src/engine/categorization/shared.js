@@ -71,6 +71,19 @@ export const tokens = (s) =>
     .map((t) => t.trim().toLowerCase())
     .filter((t) => t.length > 1 && !STOP_TOKENS.has(t));
 
+// Like tokens(), but preserves each token's original casing instead of
+// casefolding. Identical splitting / filtering rules, so a raw token lines up
+// index-for-index with the lowercased tokens() output for the same string.
+// The clusterer uses this to recover the on-screen spelling of a name token
+// (e.g. an all-caps "IITB") after matching case-insensitively.
+export const rawTokens = (s) =>
+  (s || '')
+    .toString()
+    .replace(/[^A-Za-z\s]/g, ' ')
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 1 && !STOP_TOKENS.has(t.toLowerCase()));
+
 // ---- Stage 1: local clustering -------------------------------------------
 
 // The contact NAME is the only thing the model actually needs to cluster on

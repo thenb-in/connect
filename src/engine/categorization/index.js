@@ -20,4 +20,8 @@
 
 export { proposeContactGroups } from './step5Propose';
 export { applyProposal } from './apply';
-export { buildCandidateClusters, partitionContactsForLlm } from './step1Local';
+export {
+  buildCandidateClusters,
+  partitionContactsForLlm,
+  isHelperContact,
+} from './step1Local';

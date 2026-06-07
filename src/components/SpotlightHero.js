@@ -29,6 +29,8 @@ const SpotlightCard = ({
   profile,
   width,
   variant = 'primary',
+  color,
+  shadowColor,
   kicker,
   kickerIcon = 'lightning-bolt',
   subline,
@@ -39,8 +41,12 @@ const SpotlightCard = ({
   onPress,
   onCall,
 }) => {
-  const bg = variant === 'accent' ? theme.colors.accent : theme.colors.primary;
-  const shadow = variant === 'accent' ? theme.colors.accent : theme.colors.primaryDark;
+  // An explicit `color` lets the carousel give each lane its own hue; the
+  // `variant` fallback keeps older callers (two-tone teal/terracotta) working.
+  // Card text is always light, so any sufficiently deep colour reads fine.
+  const bg = color || (variant === 'accent' ? theme.colors.accent : theme.colors.primary);
+  const shadow =
+    shadowColor || color || (variant === 'accent' ? theme.colors.accent : theme.colors.primaryDark);
 
   const Kicker = (
     <View style={styles.kickerRow}>

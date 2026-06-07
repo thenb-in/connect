@@ -23,6 +23,9 @@ import {
 import {
   setOnboarded,
   setSetupCompleted,
+  getOnboardingProgress,
+  setOnboardingProgress,
+  clearOnboardingProgress,
   getPermsState,
   getLlmConfig,
   hasLlmKey,
@@ -33,14 +36,26 @@ import {
   ensureStandardGroups,
   getAdvancedMode,
   setAdvancedMode,
+  setSelectedClusters,
   WANT_TO_CONNECT_GROUP_ID,
   LLM_PROVIDERS,
   LLM_PROVIDER_META,
 } from '../storage';
+import {
+  applyProposal,
+  buildCandidateClusters,
+  isHelperContact,
+} from '../engine/categorization';
 import CategoriseProposalModal from '../components/CategoriseProposalModal';
+import ClusterKeywordModal from '../components/ClusterKeywordModal';
 import ContactPickerModal from '../components/ContactPickerModal';
 import UserContextModal from '../components/UserContextModal';
 import { useRecategorise } from '../hooks/useRecategorise';
+
+// A name-token cluster (e.g. "Cluster: Rao") vs a label cluster (Family,
+// Helpers). Only the name-token ones are surfaced as user-pickable keywords —
+// their ids carry the `cluster-` prefix from buildCandidateClusters.
+const isNameTokenCluster = (c) => typeof c?.id === 'string' && c.id.startsWith('cluster-');
 
 // Single source of truth for badge appearance per step state. Maps a state
 // to its background color and the badge glyph factory; the index is only
@@ -132,6 +147,16 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
 
   const initialPerms = getPermsState();
   const initialLlm = getLlmConfig();
+  // Snapshot of a previous (interrupted) onboarding run. Null on a fresh
+  // install. We only resume the *pre-work* decisions — that the user got past
+  // the welcome splash, and any "Skip for now" they tapped on the LLM-key /
+  // about-you steps. The work stage (cluster → choose-who → analyse) is a
+  // single live run with modals and async LLM calls that can't survive a kill,
+  // so it deliberately always restarts clean: persisting its done/skipped
+  // sub-states would otherwise mark clustering "done" before setup actually
+  // finished and skip it on the next attempt. Cleared on completion and on a
+  // full data wipe.
+  const savedProgress = getOnboardingProgress();
   const [perms, setPerms] = useState({
     contacts: initialPerms.contacts,
     callLog: initialPerms.callLog,
@@ -139,6 +164,20 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [done, setDone] = useState(false);
+
+  // First impression: a plain "Welcome to Connect" splash with a single Start
+  // button. The setup steps (Advanced toggle, permissions, clustering, …) stay
+  // hidden behind the header until the user taps Start, so they aren't dropped
+  // straight into a wall of options. Resumes past the splash if a prior run got
+  // that far.
+  const [started, setStarted] = useState(Boolean(savedProgress?.started));
+
+  // Latches true once clustering + the grouping review are done. The flow then
+  // pauses back on the onboarding screen — the "Choose who to connect with"
+  // picker only opens when the user taps Continue, rather than springing up on
+  // its own the moment grouping finishes. Always starts false: this is work-
+  // stage state, not resumed across a kill (see savedProgress above).
+  const [clusterStageDone, setClusterStageDone] = useState(false);
 
   // Advanced mode opt-in (persisted). When off, onboarding is a quick import +
   // hand-pick; the LLM key, "tell us about you", clustering, and analysis
@@ -155,8 +194,15 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   // LLM step state.
   const [llmProvider, setLlmProvider] = useState(initialLlm.provider || 'google');
   const [llmKey, setLlmKey] = useState(initialLlm.key || '');
+  // A saved key always wins (it's the source of truth); otherwise resume a
+  // prior "Skip for now" decision so we don't re-prompt for a step the user
+  // already dismissed.
   const [llmState, setLlmState] = useState(
-    initialLlm.key ? 'granted' : 'pending',
+    initialLlm.key
+      ? 'granted'
+      : savedProgress?.llmState === 'skipped'
+      ? 'skipped'
+      : 'pending',
   );
 
   // User-context step state. The modal shows the same form whether the user
@@ -165,7 +211,11 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   // user gets a chance to fill it before clustering runs.
   const [contextOpen, setContextOpen] = useState(false);
   const [contextState, setContextState] = useState(
-    hasUserProfile() ? 'granted' : 'pending',
+    hasUserProfile()
+      ? 'granted'
+      : savedProgress?.contextState === 'skipped'
+      ? 'skipped'
+      : 'pending',
   );
 
   // Auto-scroll the page when the LLM card appears so the user doesn't have
@@ -201,6 +251,9 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   // onboarding switched to the shared propose+review flow — same modal that
   // Settings and Groups use, so the user gets one consistent experience
   // regardless of entry point.
+  // Work-stage progress. Always starts clean — an interrupted run restarts from
+  // the "Analyse relationships" button rather than rehydrating half-done
+  // sub-states (which would let a partially-run clustering step look complete).
   const [progress, setProgress] = useState({
     wantToConnect: 'pending',
     cluster: 'pending',
@@ -213,6 +266,16 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   // the freshly-imported list so the modal has data without re-reading MMKV.
   const [wantPickerOpen, setWantPickerOpen] = useState(false);
   const [wantContacts, setWantContacts] = useState([]);
+
+  // The local clustering step (simple mode, or advanced without an LLM key).
+  // `keywordClusters` are the name-token clusters surfaced for selection;
+  // `keywordContacts` is the contact snapshot used to resolve member names in
+  // the review modal; `localProposal` holds the picked clusters as a proposal
+  // while the user runs the merge/delete review before they become groups.
+  const [keywordModalOpen, setKeywordModalOpen] = useState(false);
+  const [keywordClusters, setKeywordClusters] = useState([]);
+  const [keywordContacts, setKeywordContacts] = useState([]);
+  const [localProposal, setLocalProposal] = useState(null);
 
   // The hook owns the LLM call, the proposal state, the LLM-key prompt, and
   // the apply-on-confirm step — shared with Settings/Groups so all three
@@ -239,9 +302,33 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
 
     setOnboarded(true);
     setSetupCompleted(true);
+    // Setup is done — drop the resume snapshot so a later re-run (e.g. via the
+    // "Set up Connect" button after a reset) starts clean rather than rehydrating
+    // a fully-granted flow.
+    clearOnboardingProgress();
     setDone(true);
     setAnalyzing(false);
   }, [perms.callLog]);
+
+  // Clustering + grouping review finished. Don't barge into the next step —
+  // hand control back to the onboarding screen so a Continue button reappears.
+  // The cluster progress (granted/skipped) is set by each call site first.
+  const completeClusterStage = useCallback(() => {
+    setAnalyzing(false);
+    setClusterStageDone(true);
+  }, []);
+
+  // Opens the "Want to connect" hand-pick. Runs *after* clustering + the
+  // grouping review (so the user picks from a contact list that already
+  // reflects the groups we just built) and only when the user taps Continue.
+  // The picker's own confirm/skip handlers run finishOnboarding.
+  const openWantPicker = useCallback(() => {
+    ensureStandardGroups();
+    setWantContacts(getContacts());
+    setAnalyzing(true);
+    setProgress((p) => ({ ...p, wantToConnect: 'running' }));
+    setWantPickerOpen(true);
+  }, []);
 
   // Stage 2: cluster the imported contacts. With an LLM key we propose groups
   // and let the user review/edit them in the same modal Settings and Groups
@@ -249,40 +336,121 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   // heuristics alone are too rough for an unattended onboarding step. Reached
   // only after the "Want to connect" picker is dismissed.
   const runClusterAndAnalyse = useCallback(async () => {
-    // Clustering is an advanced-mode-only feature and needs an LLM key. In
-    // simple mode (or with no key) we skip straight to finishing — analysis
-    // still runs, it's just not surfaced as an LLM/cluster step.
+    // Advanced mode + an LLM key keeps the smart LLM proposal flow — the hook
+    // drives the modal lifecycle and the proposal-watching effect below picks
+    // up the next state.
     if (advancedMode && hasLlmKey()) {
       setProgress((p) => ({ ...p, cluster: 'running' }));
-      // fire-and-forget: the hook drives the modal lifecycle from here.
-      // The proposal-watching effect below picks up the next state.
       startCategorise({ allowNewGroups: true });
-    } else {
-      setProgress((p) => ({ ...p, cluster: 'skipped' }));
-      await finishOnboarding();
+      return;
     }
-  }, [advancedMode, startCategorise, finishOnboarding]);
+    // Simple mode (or advanced without a key): run the local clusterer and let
+    // the user pick the name keywords they relate to. Big clusters are
+    // auto-selected in the modal. With nothing to pick we skip straight to
+    // analysis.
+    setProgress((p) => ({ ...p, cluster: 'running' }));
+    // Filter service contacts (drivers, maids, …) out BEFORE clustering so
+    // they never form name-token keyword chips — they're routed to Helpers
+    // separately and the keyword step is about the people you relate to.
+    const contacts = getContacts().filter((c) => !isHelperContact(c));
+    const nameClusters = Object.values(buildCandidateClusters({ contacts }))
+      .filter(isNameTokenCluster)
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        token: c.name.replace(/^Cluster:\s*/i, ''),
+        categoryId: c.categoryId,
+        members: c.members,
+        count: c.members.length,
+      }));
+    if (!nameClusters.length) {
+      setProgress((p) => ({ ...p, cluster: 'skipped' }));
+      completeClusterStage();
+      return;
+    }
+    setKeywordContacts(contacts);
+    setKeywordClusters(nameClusters);
+    setKeywordModalOpen(true);
+  }, [advancedMode, startCategorise, completeClusterStage]);
+
+  // Local keyword step confirmed: persist the picked clusters, then open the
+  // shared review modal so the user can merge/delete before they become real
+  // groups. Picking nothing skips straight to analysis.
+  const onKeywordConfirm = useCallback(
+    (chosen) => {
+      setKeywordModalOpen(false);
+      setSelectedClusters(chosen);
+      if (!chosen.length) {
+        setProgress((p) => ({ ...p, cluster: 'skipped' }));
+        completeClusterStage();
+        return;
+      }
+      setProgress((p) => ({ ...p, cluster: 'awaiting_review' }));
+      setLocalProposal({
+        source: 'local',
+        // The modal hands back each cluster with the category the user
+        // dropped/tapped it into (defaulting to 'unknown'). Name the group by
+        // the bare keyword ("Rao", "IITB") now that it carries a real
+        // category — the "Cluster: " prefix was only a hint for the LLM seed.
+        groups: chosen.map((c) => ({
+          name: c.token || (c.name || '').replace(/^Cluster:\s*/i, ''),
+          categoryId: c.categoryId || 'unknown',
+          members: c.members,
+        })),
+        nameByPhone: Object.fromEntries(
+          keywordContacts.map((c) => [c.normalized, c.name]),
+        ),
+        allowNewGroups: true,
+      });
+    },
+    [keywordContacts, completeClusterStage],
+  );
+
+  const onKeywordSkip = useCallback(() => {
+    setKeywordModalOpen(false);
+    setSelectedClusters([]);
+    setProgress((p) => ({ ...p, cluster: 'skipped' }));
+    completeClusterStage();
+  }, [completeClusterStage]);
+
+  // Review modal confirmed: commit the (possibly edited) clusters as real
+  // groups, then run the analysis.
+  const onLocalApply = useCallback(
+    (editedGroups) => {
+      applyProposal(
+        { ...localProposal, groups: editedGroups },
+        { allowNewGroups: true },
+      );
+      setLocalProposal(null);
+      setProgress((p) => ({ ...p, cluster: 'granted' }));
+      completeClusterStage();
+    },
+    [localProposal, completeClusterStage],
+  );
+
+  const onLocalCancel = useCallback(() => {
+    setLocalProposal(null);
+    setProgress((p) => ({ ...p, cluster: 'skipped' }));
+    completeClusterStage();
+  }, [completeClusterStage]);
 
   const handleAnalyze = async () => {
     setAnalyzing(true);
-    // Stage 1: import contacts so the clusterer (and the picker below) has
-    // data to work with. We deliberately skip the call log here to keep this
-    // step fast; the analyse stage picks it up.
-    setProgress({ wantToConnect: 'running', cluster: 'pending', analyse: 'pending' });
+    // Stage 1: import contacts so the clusterer has data to work with. We
+    // deliberately skip the call log here to keep this step fast; the analyse
+    // stage picks it up. Once contacts are in, go straight to clustering — the
+    // "Want to connect" hand-pick now runs after clustering + grouping review.
+    setProgress({ wantToConnect: 'pending', cluster: 'running', analyse: 'pending' });
     await refreshAnalysis({
       refreshContacts: perms.contacts === 'granted',
       refreshCallLogs: false,
     });
-
-    // Seed the standard "Want to connect" group so it always exists, then let
-    // the user hand-pick people into it before clustering runs.
-    ensureStandardGroups();
-    setWantContacts(getContacts());
-    setWantPickerOpen(true);
+    runClusterAndAnalyse();
   };
 
   // "Want to connect" picker confirmed: union the chosen contacts into the
-  // standard group, then fall through to clustering + analysis.
+  // standard group, then run the final analysis. The picker is the last step
+  // before we enter Connect.
   const onWantToConnectConfirm = useCallback(
     (phones) => {
       if (phones && phones.length) {
@@ -290,16 +458,16 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
       }
       setWantPickerOpen(false);
       setProgress((p) => ({ ...p, wantToConnect: 'granted' }));
-      runClusterAndAnalyse();
+      finishOnboarding();
     },
-    [runClusterAndAnalyse],
+    [finishOnboarding],
   );
 
   const onWantToConnectSkip = useCallback(() => {
     setWantPickerOpen(false);
     setProgress((p) => ({ ...p, wantToConnect: 'skipped' }));
-    runClusterAndAnalyse();
-  }, [runClusterAndAnalyse]);
+    finishOnboarding();
+  }, [finishOnboarding]);
 
   // Watches the categorisation hook. When the LLM call settles, either we
   // have a proposal to review (modal opens, cluster → awaiting_review) or an
@@ -314,9 +482,9 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
       setProgress((p) => ({ ...p, cluster: 'awaiting_review' }));
     } else if (progress.cluster === 'running') {
       setProgress((p) => ({ ...p, cluster: 'skipped' }));
-      finishOnboarding();
+      completeClusterStage();
     }
-  }, [categorising, pendingProposal, progress.cluster, finishOnboarding]);
+  }, [categorising, pendingProposal, progress.cluster, completeClusterStage]);
 
   const onApplyProposal = useCallback(
     (editedGroups, { isEdited, allowNewGroups } = {}) => {
@@ -331,16 +499,16 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
         return;
       }
       setProgress((p) => ({ ...p, cluster: 'granted' }));
-      finishOnboarding();
+      completeClusterStage();
     },
-    [applyEditedProposal, startCategorise, finishOnboarding],
+    [applyEditedProposal, startCategorise, completeClusterStage],
   );
 
   const onCancelProposal = useCallback(() => {
     dismissProposal();
     setProgress((p) => ({ ...p, cluster: 'skipped' }));
-    finishOnboarding();
-  }, [dismissProposal, finishOnboarding]);
+    completeClusterStage();
+  }, [dismissProposal, completeClusterStage]);
 
   // On iOS the engine has very little to chew on without a call log AND
   // without an LLM key — there's no "lost connections" lane to compute and no
@@ -378,6 +546,19 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
     const t = setTimeout(handleEnter, 1200);
     return () => clearTimeout(t);
   }, [done, handleEnter]);
+
+  // Persist only the pre-work decisions (past the splash; explicit LLM/about-you
+  // skips) so an app kill mid-setup doesn't drop the user back at the welcome
+  // screen or re-prompt a step they already dismissed. The work stage
+  // (clusterStageDone / progress) is intentionally NOT saved — it must restart
+  // clean on resume (see savedProgress note above). We stop once `done`:
+  // finishOnboarding already cleared the snapshot, and writing here would just
+  // resurrect it. Permissions, advanced mode, the LLM key and the user profile
+  // each persist themselves elsewhere, so they're not duplicated here.
+  useEffect(() => {
+    if (done) return;
+    setOnboardingProgress({ started, llmState, contextState });
+  }, [started, llmState, contextState, done]);
 
   const permsReady =
     perms.contacts === 'granted' &&
@@ -430,10 +611,17 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
         ]}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={[styles.header, { paddingTop: insets.top + Math.round(sectionGap / 2) }]}>
+        <View
+          style={[
+            styles.header,
+            !started && styles.headerWelcome,
+            { paddingTop: insets.top + Math.round(sectionGap / 2) },
+          ]}
+        >
           <View
             style={[
               styles.heroIconWrap,
+              !started && styles.heroIconWrapWelcome,
               {
                 width: heroSize,
                 height: heroSize,
@@ -447,7 +635,9 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
               color={theme.colors.primary}
             />
           </View>
-          <Text style={styles.title}>Welcome to Connect</Text>
+          <Text style={[styles.title, !started && styles.titleWelcome]}>
+            Welcome to Connect
+          </Text>
           <Text style={styles.subtitle}>
             A calmer way to stay in touch with the people who matter — friends,
             family, mentors, founders, alumni. We help you find who is worth
@@ -464,8 +654,19 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
               Everything stays on your device. Nothing is uploaded.
             </Text>
           </View>
+
+          {!started ? (
+            <TouchableOpacity
+              style={[styles.primaryBtn, styles.welcomeBtn]}
+              onPress={() => setStarted(true)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.primaryBtnText}>Start</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
+        {started ? (
         <View style={styles.bodyWrap}>
           {!analyzing && !done ? (
             <TouchableOpacity
@@ -544,17 +745,17 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
                 body: 'A few quick facts — schools, colleges, workplaces, places lived — so the LLM names groups correctly. Always skippable.',
                 state: contextState,
               },
-              {
-                icon: 'account-multiple-plus-outline',
-                title: 'Choose who to connect with',
-                body: wantToConnectBody,
-                state: progress.wantToConnect,
-              },
               showWorkSteps && {
                 icon: 'account-group-outline',
                 title: 'Cluster contacts',
                 body: clusterBody,
                 state: progress.cluster,
+              },
+              {
+                icon: 'account-multiple-plus-outline',
+                title: 'Choose who to connect with',
+                body: wantToConnectBody,
+                state: progress.wantToConnect,
               },
               showWorkSteps && {
                 icon: 'lightbulb-on-outline',
@@ -693,13 +894,17 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
             <TouchableOpacity
               style={[styles.primaryBtn, analyzing && styles.btnDisabled]}
               disabled={analyzing}
-              onPress={handleAnalyze}
+              onPress={clusterStageDone ? openWantPicker : handleAnalyze}
             >
               {analyzing ? (
                 <ActivityIndicator color={theme.colors.surface} />
               ) : (
                 <Text style={styles.primaryBtnText}>
-                  {advancedMode ? 'Analyse relationships' : 'Continue'}
+                  {clusterStageDone
+                    ? 'Continue'
+                    : advancedMode
+                    ? 'Analyse relationships'
+                    : 'Continue'}
                 </Text>
               )}
             </TouchableOpacity>
@@ -710,17 +915,25 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
           )}
           </View>
         </View>
+        ) : null}
       </ScrollView>
       </KeyboardAvoidingView>
 
       <ContactPickerModal
         visible={wantPickerOpen}
-        title="Who do you want to connect with?"
-        subtitle="Pick the people you most want to stay in touch with. They go into your standard “Want to connect” group. Search, then “Select all” to grab a whole group at once."
+        title="Any particular set of people you want to connect with?"
+        subtitle="Pick the people you most want to stay in touch with. They go into your special “Want to connect” group. Search, then “Select all” to grab a whole group at once."
         contacts={wantContacts}
         confirmLabel="Want to connect"
         onConfirm={onWantToConnectConfirm}
         onSkip={onWantToConnectSkip}
+      />
+
+      <ClusterKeywordModal
+        visible={keywordModalOpen}
+        clusters={keywordClusters}
+        onConfirm={onKeywordConfirm}
+        onSkip={onKeywordSkip}
       />
 
       <CategoriseProposalModal
@@ -729,6 +942,15 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
         onApply={onApplyProposal}
         onCancel={onCancelProposal}
         showCustomise={false}
+      />
+
+      <CategoriseProposalModal
+        visible={!!localProposal}
+        proposal={localProposal}
+        onApply={onLocalApply}
+        onCancel={onLocalCancel}
+        showCustomise={false}
+        proposedOnly
       />
 
       <UserContextModal
@@ -778,6 +1000,29 @@ const styles = StyleSheet.create({
     flexGrow: 1,
   },
   header: { alignItems: 'center' },
+  // Welcome splash: take the whole screen and center the hero + copy + Start
+  // button as one calm column instead of pinning the header to the top.
+  headerWelcome: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingBottom: theme.spacing.xl,
+  },
+  heroIconWrapWelcome: {
+    marginBottom: theme.spacing.lg,
+    shadowColor: theme.colors.primary,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 20,
+    elevation: 6,
+  },
+  titleWelcome: {
+    fontSize: Math.round(theme.font.h1 * 1.1),
+    marginTop: theme.spacing.xs,
+  },
+  welcomeBtn: {
+    marginTop: theme.spacing.xl,
+    minWidth: 200,
+  },
   bodyWrap: {
     flex: 1,
     justifyContent: 'center',

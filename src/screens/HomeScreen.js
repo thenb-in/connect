@@ -141,9 +141,10 @@ const HomeScreen = ({ navigation }) => {
     [analysis],
   );
 
-  // "Missed connections" leads the carousel. iOS hides it when empty (no call
-  // history to derive it) unless "show hidden cards" is on; Android always
-  // includes it.
+  // "Missed connections" usually leads the carousel (it yields to an empty
+  // "Reconnect today" — see the cards builder below). iOS hides it when empty
+  // (no call history to derive it) unless "show hidden cards" is on; Android
+  // always includes it.
   const missedConnections = useMemo(
     () => analysis?.missedCallsToReturn || [],
     [analysis],
@@ -158,53 +159,68 @@ const HomeScreen = ({ navigation }) => {
   // before the lane is meaningful.
   const notEnoughData = (analysis?.counts?.connectedPeople || 0) < 3;
 
-  // The spotlight carousel, one card per lane, left → right:
-  //   1. Missed connections — people who called and you haven't called back
-  //   2. Reconnect today     — the people the engine flags as overdue
-  //   3. Want to connect      — the people you hand-picked to keep close
-  //   4. Say hi today         — one light suggestion per group
-  // Each lane is its own swipeable card; empty lanes are dropped (Missed follows
-  // the iOS hide-when-empty rule above). The carousel opens centred on "Reconnect
-  // today", or "Want to connect" when the engine has nothing pressing.
+  // The spotlight carousel, one card per lane. Order, left → right:
+  //   • Missed connections — people who called and you haven't called back
+  //   • Reconnect today     — the people the engine flags as overdue
+  //   • Want to connect      — the people you hand-picked to keep close
+  //   • Say hi today         — one light suggestion per group
+  // Missed normally leads with Reconnect today centred to its right — but when
+  // Reconnect today has no people to show (just its nudge / empty state) it
+  // moves ahead of Missed, so the empty card isn't buried behind a populated
+  // lane. This is ordering only: focusIndex (key-based) keeps the same card
+  // centred either way. Each lane is its own swipeable card; empty lanes are
+  // dropped (Missed follows the iOS hide-when-empty rule above).
   const cards = useMemo(() => {
     const out = [];
-    if (includeMissed) {
-      out.push({
-        key: 'missed',
-        variant: 'accent',
-        kicker: 'MISSED CONNECTIONS',
-        kickerIcon: 'phone-missed',
-        subline: "They called — you haven't called back",
-        list: missedConnections,
-        footerLabel:
-          missedConnections.length > 1
-            ? `+${missedConnections.length - 1} more`
-            : null,
-        navTarget: 'ConnectMissed',
-        emptyTitle: 'No missed connections',
-        emptyBody: "You've returned everyone's calls.",
-      });
-    }
-    if (reconnectToday.length || showHidden || notEnoughData) {
-      out.push({
-        key: 'reconnect',
-        variant: 'primary',
-        kicker: 'RECONNECT TODAY',
-        kickerIcon: 'lightning-bolt',
-        subline: "You've gone quiet — a good time to reconnect",
-        list: reconnectToday,
-        footerLabel: reconnectToday.length > 1 ? 'See all' : null,
-        navTarget: 'ConnectReconnect',
-        emptyTitle: notEnoughData ? 'Start building your history' : 'All caught up',
-        emptyBody: notEnoughData
-          ? 'Connect finds people to reconnect with from your call history. Make a few calls and they’ll start showing up here.'
-          : "People you've called before but haven't spoken to in a while show up here to reconnect. You're in touch with everyone right now.",
-      });
+    const missedCard = includeMissed
+      ? {
+          key: 'missed',
+          variant: 'accent',
+          color: theme.colors.accent,
+          kicker: 'MISSED CONNECTIONS',
+          kickerIcon: 'phone-missed',
+          subline: "They called — you haven't called back",
+          list: missedConnections,
+          footerLabel:
+            missedConnections.length > 1
+              ? `+${missedConnections.length - 1} more`
+              : null,
+          navTarget: 'ConnectMissed',
+          emptyTitle: 'No missed connections',
+          emptyBody: "You've returned everyone's calls.",
+        }
+      : null;
+    const reconnectCard =
+      reconnectToday.length || showHidden || notEnoughData
+        ? {
+            key: 'reconnect',
+            variant: 'primary',
+            color: theme.colors.primary,
+            kicker: 'RECONNECT TODAY',
+            kickerIcon: 'lightning-bolt',
+            subline: "You've gone quiet — a good time to reconnect",
+            list: reconnectToday,
+            footerLabel: reconnectToday.length > 1 ? 'See all' : null,
+            navTarget: 'ConnectReconnect',
+            emptyTitle: notEnoughData ? 'Start building your history' : 'All caught up',
+            emptyBody: notEnoughData
+              ? 'Connect finds people to reconnect with from your call history. Make a few calls and they’ll start showing up here.'
+              : "People you've called before but haven't spoken to in a while show up here to reconnect. You're in touch with everyone right now.",
+          }
+        : null;
+    // Reconnect leads only when it's present but empty; otherwise Missed leads.
+    if (reconnectCard && reconnectToday.length === 0) {
+      out.push(reconnectCard);
+      if (missedCard) out.push(missedCard);
+    } else {
+      if (missedCard) out.push(missedCard);
+      if (reconnectCard) out.push(reconnectCard);
     }
     if (wantToConnect.length || showHidden) {
       out.push({
         key: 'want',
         variant: 'primary',
+        color: theme.colors.success,
         kicker: 'WANT TO CONNECT',
         kickerIcon: 'account-heart',
         subline: 'People you chose to keep close',
@@ -221,6 +237,7 @@ const HomeScreen = ({ navigation }) => {
       out.push({
         key: 'random',
         variant: 'primary',
+        color: theme.colors.warning,
         kicker: 'SAY HI TODAY',
         kickerIcon: 'hand-wave',
         subline: 'A few people from your circles',
@@ -242,8 +259,9 @@ const HomeScreen = ({ navigation }) => {
   ]);
 
   // The card the carousel opens on: "Reconnect today" if the engine flagged
-  // anyone, otherwise "Want to connect", otherwise "Say hi today". Missed always
-  // sits to its left, reachable with a swipe.
+  // anyone, otherwise "Want to connect", otherwise "Say hi today". Missed sits
+  // beside it (to its left when Reconnect has people, to its right when
+  // Reconnect is empty), reachable with a swipe.
   const focusIndex = useMemo(() => {
     // Prefer the first priority lane that actually has someone in it, so we
     // never open on an empty card (e.g. the low-data Reconnect nudge) while a
@@ -372,6 +390,7 @@ const HomeScreen = ({ navigation }) => {
                     profile={card.list[0] || null}
                     width={CARD_W}
                     variant={card.variant}
+                    color={card.color}
                     kicker={card.kicker}
                     kickerIcon={card.kickerIcon}
                     subline={card.subline}

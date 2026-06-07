@@ -170,7 +170,7 @@ const ContactPickerModal = ({
           {visibleKeys.length > 0 ? (
             <TouchableOpacity onPress={onSelectAllVisible} style={styles.statusBtn}>
               <Text style={styles.statusBtnText}>
-                {allVisibleSelected ? 'Unselect all' : 'Select all'}
+                {allVisibleSelected ? 'Unselect filtered' : 'Select filtered'}
               </Text>
             </TouchableOpacity>
           ) : null}
