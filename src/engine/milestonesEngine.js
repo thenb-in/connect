@@ -11,8 +11,8 @@
 //   - "weekly": reconnect with Z distinct people within a rolling 7-day window
 //     (a momentum burst — earned once and kept, even after the week passes)
 //
-// The engine never reads from storage; callers pass the reconnect map in. That
-// keeps it trivial to unit test and lets the UI choose the data window.
+// The engine never reads from storage; callers pass the reconnect events in.
+// That keeps it trivial to unit test and lets the UI choose the data window.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -26,21 +26,23 @@ const localDayIndex = (ts) => {
 };
 
 /**
- * Derives headline reconnect stats from the reconnects map.
+ * Derives headline reconnect stats from the list of reconnect events. Each
+ * event is one connected call, so a person called on several days contributes a
+ * day each — which is what makes the streak measure "days you reached out"
+ * rather than "days someone's most-recent call happened to land on".
  *
- * @param {Object} reconnects - { [normalizedPhone]: timestampMs }
+ * @param {Array<{phone:string, ts:number}>} events - connected-call events
  * @param {number} [now]
  * @returns {{ totalPeople:number, currentStreakDays:number,
  *            longestStreakDays:number, lastReconnectAt:number,
  *            reconnectsThisWeek:number }}
  */
-export const computeReconnectStats = (reconnects = {}, now = Date.now()) => {
-  const timestamps = Object.values(reconnects || {})
-    .map((t) => Number(t))
-    .filter((t) => Number.isFinite(t) && t > 0);
+export const computeReconnectStats = (events = [], now = Date.now()) => {
+  const list = (Array.isArray(events) ? events : [])
+    .map((e) => ({ phone: e?.phone, ts: Number(e?.ts) }))
+    .filter((e) => e.phone && Number.isFinite(e.ts) && e.ts > 0);
 
-  const totalPeople = timestamps.length;
-  if (totalPeople === 0) {
+  if (list.length === 0) {
     return {
       totalPeople: 0,
       currentStreakDays: 0,
@@ -50,15 +52,19 @@ export const computeReconnectStats = (reconnects = {}, now = Date.now()) => {
     };
   }
 
-  const lastReconnectAt = Math.max(...timestamps);
+  // "People" counts distinct numbers, not raw events.
+  const totalPeople = new Set(list.map((e) => e.phone)).size;
+  const lastReconnectAt = Math.max(...list.map((e) => e.ts));
 
-  // Distinct people whose most recent reconnect falls in the last 7 days — the
-  // "this week" momentum signal that the home scoreboard used to show.
+  // Distinct people reconnected with in the last 7 days — the "this week"
+  // momentum signal the weekly milestones measure.
   const weekAgo = now - 7 * DAY_MS;
-  const reconnectsThisWeek = timestamps.filter((t) => t >= weekAgo).length;
+  const reconnectsThisWeek = new Set(
+    list.filter((e) => e.ts >= weekAgo).map((e) => e.phone),
+  ).size;
 
   // Unique calendar days that had at least one reconnect, ascending.
-  const days = [...new Set(timestamps.map(localDayIndex))].sort((a, b) => a - b);
+  const days = [...new Set(list.map((e) => localDayIndex(e.ts)))].sort((a, b) => a - b);
 
   // Longest run of consecutive days anywhere in the history.
   let longestStreakDays = 1;

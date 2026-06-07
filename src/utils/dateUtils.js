@@ -138,11 +138,14 @@ export const getLogTimestamp = (log) => {
 };
 
 /**
- * Whether a call-log row counts as a connected (answered) call. Prefers an
- * explicit stored `connected` flag — system-recorded reconnect rows set it true
- * with a blank duration — and otherwise falls back to the app-wide "lasted over
- * a minute" rule. The single source of truth for "did this call connect?", used
- * by the call-log viewer, the storage layer, and the reconnect query.
+ * Whether a call-log row counts as a connected (answered) call. The stored
+ * `connected` boolean is the sole authority: if it's set, that's the answer —
+ * duration is NOT consulted, so a 10-second call flagged connected reads
+ * connected, and a 5-minute call flagged not-connected (e.g. an IVR/robot)
+ * reads not-connected. Duration only seeds the *initial* value when a row has
+ * no flag yet (legacy rows; new rows always persist one). The single source of
+ * truth for "did this call connect?", used by the call-log viewer, the storage
+ * layer, and the reconnect query.
  */
 export const isLogConnected = (log) => {
   if (typeof log?.connected === 'boolean') {

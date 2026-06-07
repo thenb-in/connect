@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  getReconnects,
+  getReconnectEvents,
   getMilestoneDefinitions,
   getMilestonesState,
   markMilestoneAchieved,
@@ -16,7 +16,8 @@ import {
  * any newly-earned milestone so its earn date survives a streak later lapsing.
  *
  * Pass a changing `dep` (e.g. the analysis generatedAt) to recompute after a
- * refresh, since reconnects are recorded as a side effect of analysis.
+ * refresh, since reconnects are derived from the call-log store that a refresh
+ * updates.
  *
  * @returns {{ milestones: Array, stats: Object, refresh: Function }}
  */
@@ -25,7 +26,7 @@ export const useMilestones = (dep) => {
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   const { milestones, stats } = useMemo(() => {
-    const s = computeReconnectStats(getReconnects());
+    const s = computeReconnectStats(getReconnectEvents());
     const evaluated = evaluateMilestones(
       getMilestoneDefinitions(),
       s,

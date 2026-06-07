@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -47,8 +47,8 @@ import AboutModal from '../components/AboutModal';
  */
 const HomeScreen = ({ navigation }) => {
   const { analysis, refreshing, refresh, syncOnFocus } = useConnectAnalysis();
-  // Recompute milestone progress whenever the analysis regenerates, since
-  // reconnects are recorded as a side effect of a refresh/focus sync.
+  // Recompute milestone progress whenever the analysis regenerates: reconnects
+  // are derived from the call-log store, which a refresh/focus sync updates.
   const { milestones } = useMilestones(analysis?.generatedAt);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -136,32 +136,152 @@ const HomeScreen = ({ navigation }) => {
     return [...list].sort((a, b) => overdue(b) - overdue(a)).slice(0, 10);
   }, [analysis]);
 
-  // The magnetic top-of-screen highlights, in priority order so the spotlight
-  // always has someone to feature:
-  //   1. "reconnect today" — people the engine flags as overdue
-  //   2. "want to connect" — the people you hand-picked to keep close
-  //   3. one person per group — last resort for brand-new users
-  const { highlights, highlightsSource } = useMemo(() => {
-    const reconnect = analysis?.reconnectToday || [];
-    if (reconnect.length) return { highlights: reconnect, highlightsSource: 'reconnect' };
-    if (wantToConnect.length) return { highlights: wantToConnect, highlightsSource: 'wantToConnect' };
-    return { highlights: randomPerGroup.map((r) => r.profile), highlightsSource: 'random' };
-  }, [analysis, wantToConnect, randomPerGroup]);
-  const hero = highlights[0] || null;
-  const queue = useMemo(() => highlights.slice(1, 8), [highlights]);
+  const reconnectToday = useMemo(
+    () => analysis?.reconnectToday || [],
+    [analysis],
+  );
 
-  // "Missed connections" is now the second card in the spotlight carousel. iOS
-  // hides it when empty (no call history to derive it) unless "show hidden
-  // cards" is on; Android always includes it.
-  const missedConnections = analysis?.missedCallsToReturn || [];
+  // "Missed connections" leads the carousel. iOS hides it when empty (no call
+  // history to derive it) unless "show hidden cards" is on; Android always
+  // includes it.
+  const missedConnections = useMemo(
+    () => analysis?.missedCallsToReturn || [],
+    [analysis],
+  );
   const includeMissed =
     missedConnections.length > 0 || Platform.OS === 'android' || showHidden;
-  const reachSubline =
-    highlightsSource === 'reconnect'
-      ? "You've gone quiet — a good time to reconnect"
-      : highlightsSource === 'wantToConnect'
-      ? 'People you chose to keep close'
-      : 'A few people from your circles';
+
+  // Too little call history to make reconnect suggestions yet (a fresh install,
+  // or iOS before any calls have been tracked). Drives the Reconnect card's
+  // empty state: nudge the user to make/log calls so we gather history, instead
+  // of claiming they're "all caught up". Needs at least a few connected people
+  // before the lane is meaningful.
+  const notEnoughData = (analysis?.counts?.connectedPeople || 0) < 3;
+
+  // The spotlight carousel, one card per lane, left → right:
+  //   1. Missed connections — people who called and you haven't called back
+  //   2. Reconnect today     — the people the engine flags as overdue
+  //   3. Want to connect      — the people you hand-picked to keep close
+  //   4. Say hi today         — one light suggestion per group
+  // Each lane is its own swipeable card; empty lanes are dropped (Missed follows
+  // the iOS hide-when-empty rule above). The carousel opens centred on "Reconnect
+  // today", or "Want to connect" when the engine has nothing pressing.
+  const cards = useMemo(() => {
+    const out = [];
+    if (includeMissed) {
+      out.push({
+        key: 'missed',
+        variant: 'accent',
+        kicker: 'MISSED CONNECTIONS',
+        kickerIcon: 'phone-missed',
+        subline: "They called — you haven't called back",
+        list: missedConnections,
+        footerLabel:
+          missedConnections.length > 1
+            ? `+${missedConnections.length - 1} more`
+            : null,
+        navTarget: 'ConnectMissed',
+        emptyTitle: 'No missed connections',
+        emptyBody: "You've returned everyone's calls.",
+      });
+    }
+    if (reconnectToday.length || showHidden || notEnoughData) {
+      out.push({
+        key: 'reconnect',
+        variant: 'primary',
+        kicker: 'RECONNECT TODAY',
+        kickerIcon: 'lightning-bolt',
+        subline: "You've gone quiet — a good time to reconnect",
+        list: reconnectToday,
+        footerLabel: reconnectToday.length > 1 ? 'See all' : null,
+        navTarget: 'ConnectReconnect',
+        emptyTitle: notEnoughData ? 'Start building your history' : 'All caught up',
+        emptyBody: notEnoughData
+          ? 'Connect finds people to reconnect with from your call history. Make a few calls and they’ll start showing up here.'
+          : "People you've called before but haven't spoken to in a while show up here to reconnect. You're in touch with everyone right now.",
+      });
+    }
+    if (wantToConnect.length || showHidden) {
+      out.push({
+        key: 'want',
+        variant: 'primary',
+        kicker: 'WANT TO CONNECT',
+        kickerIcon: 'account-heart',
+        subline: 'People you chose to keep close',
+        list: wantToConnect,
+        footerLabel: wantToConnect.length > 1 ? 'See all' : null,
+        navTarget: 'ConnectGroupDetail',
+        navParams: { groupId: WANT_TO_CONNECT_GROUP_ID },
+        emptyTitle: 'No one picked yet',
+        emptyBody: "Add people to your “Want to connect” group to see them here.",
+      });
+    }
+    const randomProfiles = randomPerGroup.map((r) => r.profile);
+    if (randomProfiles.length || showHidden) {
+      out.push({
+        key: 'random',
+        variant: 'primary',
+        kicker: 'SAY HI TODAY',
+        kickerIcon: 'hand-wave',
+        subline: 'A few people from your circles',
+        list: randomProfiles,
+        footerLabel: null,
+        emptyTitle: 'No suggestions yet',
+        emptyBody: 'Sort some contacts into groups to get suggestions here.',
+      });
+    }
+    return out;
+  }, [
+    includeMissed,
+    missedConnections,
+    reconnectToday,
+    wantToConnect,
+    randomPerGroup,
+    showHidden,
+    notEnoughData,
+  ]);
+
+  // The card the carousel opens on: "Reconnect today" if the engine flagged
+  // anyone, otherwise "Want to connect", otherwise "Say hi today". Missed always
+  // sits to its left, reachable with a swipe.
+  const focusIndex = useMemo(() => {
+    // Prefer the first priority lane that actually has someone in it, so we
+    // never open on an empty card (e.g. the low-data Reconnect nudge) while a
+    // populated lane is sitting right beside it.
+    for (const key of ['reconnect', 'want', 'random']) {
+      const i = cards.findIndex((c) => c.key === key && c.list.length);
+      if (i >= 0) return i;
+    }
+    // Nothing populated — fall back to the first priority lane present at all.
+    for (const key of ['reconnect', 'want', 'random']) {
+      const i = cards.findIndex((c) => c.key === key);
+      if (i >= 0) return i;
+    }
+    return 0;
+  }, [cards]);
+
+  // Re-centre the carousel on the focus card only when the *set* of lanes
+  // changes (signature), not on every focus-sync — so a manual swipe isn't
+  // yanked back when the engine re-syncs. `focusedIdx` drives the "Up next" row
+  // below to follow whichever card is centred.
+  const signature = cards.map((c) => c.key).join(',');
+  const carouselRef = useRef(null);
+  const [focusedIdx, setFocusedIdx] = useState(0);
+  useEffect(() => {
+    if (!cards.length) return undefined;
+    setFocusedIdx(focusIndex);
+    const x = focusIndex * (CARD_W + CARD_GAP);
+    const raf = requestAnimationFrame(() => {
+      carouselRef.current?.scrollTo({ x, animated: false });
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, CARD_W]);
+
+  const queue = useMemo(
+    () => (cards[focusedIdx]?.list || []).slice(1, 8),
+    [cards, focusedIdx],
+  );
 
   const onCardPress = useCallback(
     (profile) => {
@@ -217,59 +337,61 @@ const HomeScreen = ({ navigation }) => {
           ) : null;
         })()}
 
-        {/* The magnetic centrepiece: a swipeable carousel of spotlight cards —
-            "Reach out today" first, "Missed connections" beside it. The next
-            card peeks ~10% to hint the swipe; the "up next" queue sits below. */}
-        {hero || includeMissed ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            decelerationRate="fast"
-            snapToInterval={CARD_W + CARD_GAP}
-            snapToAlignment="start"
-            contentContainerStyle={styles.carousel}
-          >
-            {hero ? (
-              <View
-                style={{ width: CARD_W, marginRight: includeMissed ? CARD_GAP : 0 }}
-              >
-                <SpotlightCard
-                  profile={hero}
-                  width={CARD_W}
-                  variant="primary"
-                  kicker="REACH OUT TODAY"
-                  kickerIcon="lightning-bolt"
-                  subline={reachSubline}
-                  footerLabel={highlights.length > 1 ? 'See all' : null}
-                  onFooterPress={() => navigation.navigate('ConnectReconnect')}
-                  onPress={onCardPress}
-                  onCall={onCall}
-                />
-              </View>
-            ) : null}
-            {includeMissed ? (
-              <View style={{ width: CARD_W }}>
-                <SpotlightCard
-                  profile={missedConnections[0] || null}
-                  width={CARD_W}
-                  variant="accent"
-                  kicker="MISSED CONNECTIONS"
-                  kickerIcon="phone-missed"
-                  subline="They called — you haven't called back"
-                  footerLabel={
-                    missedConnections.length > 1
-                      ? `+${missedConnections.length - 1} more`
-                      : null
-                  }
-                  onFooterPress={() => navigation.navigate('ConnectMissed')}
-                  emptyTitle="No missed connections"
-                  emptyBody="You've returned everyone's calls."
-                  onPress={onCardPress}
-                  onCall={onCall}
-                />
-              </View>
-            ) : null}
-          </ScrollView>
+        {/* The magnetic centrepiece: a swipeable carousel with one spotlight
+            card per lane — Missed connections, Reconnect today, Want to connect,
+            Say hi today. It opens centred on the focus card; the next card peeks
+            ~10% to hint the swipe; the "up next" queue below follows whichever
+            card is centred. */}
+        {cards.length ? (
+          <>
+            <ScrollView
+              ref={carouselRef}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              decelerationRate="fast"
+              snapToInterval={CARD_W + CARD_GAP}
+              snapToAlignment="start"
+              contentOffset={{ x: focusIndex * (CARD_W + CARD_GAP), y: 0 }}
+              onMomentumScrollEnd={(e) => {
+                const idx = Math.round(
+                  e.nativeEvent.contentOffset.x / (CARD_W + CARD_GAP),
+                );
+                setFocusedIdx(Math.max(0, Math.min(idx, cards.length - 1)));
+              }}
+              contentContainerStyle={styles.carousel}
+            >
+              {cards.map((card, idx) => (
+                <View
+                  key={card.key}
+                  style={{
+                    width: CARD_W,
+                    marginRight: idx < cards.length - 1 ? CARD_GAP : 0,
+                  }}
+                >
+                  <SpotlightCard
+                    profile={card.list[0] || null}
+                    width={CARD_W}
+                    variant={card.variant}
+                    kicker={card.kicker}
+                    kickerIcon={card.kickerIcon}
+                    subline={card.subline}
+                    footerLabel={card.footerLabel}
+                    onFooterPress={
+                      card.navTarget
+                        ? () =>
+                            navigation.navigate(card.navTarget, card.navParams)
+                        : undefined
+                    }
+                    emptyTitle={card.emptyTitle}
+                    emptyBody={card.emptyBody}
+                    onPress={onCardPress}
+                    onCall={onCall}
+                  />
+                </View>
+              ))}
+            </ScrollView>
+            <UpNextRow items={queue} onPress={onCardPress} onCall={onCall} />
+          </>
         ) : (
           <EmptyState
             icon="account-heart-outline"
@@ -277,9 +399,6 @@ const HomeScreen = ({ navigation }) => {
             body="Pick a few people for your “Want to connect” group and they’ll show up here."
           />
         )}
-        {hero ? (
-          <UpNextRow items={queue} onPress={onCardPress} onCall={onCall} />
-        ) : null}
 
         {milestones.length > 0 ? (
           <>

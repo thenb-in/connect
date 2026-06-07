@@ -24,17 +24,18 @@ const reasonForProfile = (profile) => {
     return `Strong past communication, quiet for ${summary.daysSinceLast} days`;
   }
   if (summary.pendingMissed > 0) {
-    // pendingMissed > 0 means the most recent interaction is a missed call, so
-    // `summary.last` is exactly when that call came in. Use the calendar-day
-    // count (not the elapsed-ms `daysSinceLast`) so a call last night reads
-    // "yesterday", not "today".
-    const days = calendarDaysSince(summary.last);
+    // Show when the (latest pending) missed call came in. Use `lastMissed`, not
+    // `last` — there may be a newer non-connected call-back attempt, but it's
+    // the miss we want to surface. Calendar-day count (not elapsed-ms
+    // `daysSinceLast`) so a call last night reads "yesterday", not "today".
+    const missedTs = summary.lastMissed || summary.last;
+    const days = calendarDaysSince(missedTs);
     const when = relativeDays(days);
     // For a same-day or previous-day miss the clock time is meaningful, so pin
     // it ("yesterday at 10:27 PM"); older misses just read the relative day.
     const at =
-      days !== null && days <= 1 && formatClockTime(summary.last)
-        ? `${when} at ${formatClockTime(summary.last)}`
+      days !== null && days <= 1 && formatClockTime(missedTs)
+        ? `${when} at ${formatClockTime(missedTs)}`
         : when;
     if (summary.pendingMissed === 1) {
       return at

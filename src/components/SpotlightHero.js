@@ -11,10 +11,15 @@ import { WANT_TO_CONNECT_GROUP_ID } from '../storage';
 
 const firstNameOf = (name) => (name || '').trim().split(/\s+/)[0] || 'them';
 
+// Raw name-token clusters keep the engine's "Cluster: <token>" name even after
+// they're applied as groups. They're an internal grouping signal, not a label
+// worth showing next to a person — so we never surface them as a group pill.
+const isClusterGroup = (g) => /^Cluster: /.test(g?.name || '');
+
 /**
  * A bold, high-contrast "spotlight" card that pulls one person forward as the
  * call to make right now. Parametrised so the home carousel can render both the
- * "Reach out today" card (teal) and the "Missed connections" card (terracotta)
+ * "Reconnect today" card (teal) and the "Missed connections" card (terracotta)
  * from the same component — they only differ in colour, kicker, and footer.
  *
  * `width` is supplied by the carousel so each card is a fixed page width and
@@ -64,9 +69,12 @@ const SpotlightCard = ({
   const lastSpoke = formatLastSpoke(profile.summary);
   const hasLastSpoke = lastSpoke !== 'Never';
   const firstName = firstNameOf(profile.contact?.name);
-  // Skip the standard "Want to connect" group — it's a redundant label here.
+  // Skip the standard "Want to connect" group (redundant label here) and any
+  // raw "Cluster: …" name-token group (an internal signal, not a real label).
   const topGroup =
-    (profile.groups || []).find((g) => g.id !== WANT_TO_CONNECT_GROUP_ID) || null;
+    (profile.groups || []).find(
+      (g) => g.id !== WANT_TO_CONNECT_GROUP_ID && !isClusterGroup(g),
+    ) || null;
 
   return (
     <TouchableOpacity

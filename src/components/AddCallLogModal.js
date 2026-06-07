@@ -39,7 +39,7 @@ const TYPES = [
  *   visible   — show/hide the sheet.
  *   contacts  — contacts to search when picking a number.
  *   onClose   — () => void, dismiss without saving.
- *   onAdd     — ({ phoneNumber, type, duration, timestamp }) => void, save it.
+ *   onAdd     — ({ phoneNumber, type, duration, timestamp, connected }) => void, save it.
  */
 const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
   const insets = useSafeAreaInsets();
@@ -109,6 +109,12 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
       // A missed call never connected, so its duration is always zero.
       duration: isMissed ? 0 : (parseInt(durationMin, 10) || 0) * 60,
       timestamp,
+      // A hand-logged call defaults to connected (the user is recording a call
+      // that happened) — only a missed call counts as not connected. This is
+      // independent of duration, so logging "I called mom" without a duration
+      // still counts as a reconnect instead of falling through to the
+      // duration-based "over a minute" rule.
+      connected: !isMissed,
     });
   }, [canSave, onAdd, number, type, isMissed, durationMin, timestamp]);
 

@@ -6,7 +6,7 @@ import AppHeader from '../components/AppHeader';
 import EmptyState from '../components/EmptyState';
 import ConnectSetupGate from '../components/ConnectSetupGate';
 import AddCallLogModal from '../components/AddCallLogModal';
-import { addCallLog, deleteCallLogAt, getCallLogs, getContacts } from '../storage';
+import { addCallLog, deleteCallLogAt, updateCallLogAt, getCallLogs, getContacts } from '../storage';
 import { normalizeLast10 } from '../utils/phone';
 import { formatTimestamp, formatDuration, getLogTimestamp, isLogConnected } from '../utils/dateUtils';
 
@@ -31,11 +31,12 @@ const typeMeta = (raw) => {
 };
 
 /**
- * Read-only viewer for the call-log snapshot Connect has saved to the device
- * (the `connect.callLogs` MMKV key). Shows exactly what we store for each
- * call — number (resolved to a contact name when we have one), date & time it
- * was initiated, and duration. Reached from Settings → Data & Privacy so the
- * user can audit the data the app keeps.
+ * Viewer for the call-log snapshot Connect has saved to the device (the
+ * `connect.callLogs` MMKV key). Shows exactly what we store for each call —
+ * number (resolved to a contact name when we have one), date & time it was
+ * initiated, and duration — and lets the user add an entry, delete a row, or
+ * tap a connected/not-connected call to correct its status. Reached from
+ * Settings → Data & Privacy so the user can audit the data the app keeps.
  */
 const CallLogsScreen = ({ navigation }) => {
   const [addOpen, setAddOpen] = useState(false);
@@ -91,6 +92,20 @@ const CallLogsScreen = ({ navigation }) => {
     }
   }, [buildRows]);
 
+  // Manually flip a call's connected status. Only meaningful for incoming /
+  // outgoing calls (a missed/rejected call never connects), so callers gate on
+  // item.meta.connected. Persists the explicit `connected` boolean (the stored
+  // source of truth) plus `connectedManual` so a device re-import won't
+  // re-derive it from duration and clobber the override.
+  const handleToggleConnected = useCallback((item) => {
+    if (updateCallLogAt(item.origIndex, {
+      connected: !item.connected,
+      connectedManual: true,
+    })) {
+      setRows(buildRows());
+    }
+  }, [buildRows]);
+
   const handleDelete = useCallback((item) => {
     const who = item.name || item.phoneNumber;
     Alert.alert(
@@ -124,55 +139,69 @@ const CallLogsScreen = ({ navigation }) => {
         <FlatList
           data={rows}
           keyExtractor={(r) => r.id}
-          renderItem={({ item }) => (
-            <View style={styles.row}>
-              <Icon name={item.meta.icon} size={20} color={item.meta.color} />
-              <View style={styles.body}>
-                <Text style={styles.title} numberOfLines={1}>
-                  {item.name || item.phoneNumber}
-                </Text>
-                <Text style={styles.sub} numberOfLines={1}>
-                  {item.meta.label}
-                  {item.name ? ` · ${item.phoneNumber}` : ''}
-                  {item.madeBy === 'system' ? ' · System' : ''}
-                </Text>
-                <Text style={styles.when}>
-                  {item.ts ? formatTimestamp(item.ts) : 'Unknown time'}
-                </Text>
-                <View style={styles.connectedRow}>
-                  <Icon
-                    name={item.connected ? 'check-circle' : 'close-circle'}
-                    size={13}
-                    color={item.connected ? theme.colors.success : theme.colors.textSubtle}
-                  />
-                  <Text
-                    style={[
-                      styles.connectedText,
-                      { color: item.connected ? theme.colors.success : theme.colors.textSubtle },
-                    ]}
-                  >
-                    {item.connected ? 'Connected' : 'Not connected'}
+          renderItem={({ item }) => {
+            // "Connected" only makes sense for incoming/outgoing calls — a
+            // missed/rejected call never connects, so we neither show the status
+            // nor let the user toggle it there.
+            const showConnected = item.meta.connected;
+            const RowWrapper = showConnected ? TouchableOpacity : View;
+            return (
+              <RowWrapper
+                style={styles.row}
+                {...(showConnected
+                  ? { activeOpacity: 0.7, onPress: () => handleToggleConnected(item) }
+                  : {})}
+              >
+                <Icon name={item.meta.icon} size={20} color={item.meta.color} />
+                <View style={styles.body}>
+                  <Text style={styles.title} numberOfLines={1}>
+                    {item.name || item.phoneNumber}
                   </Text>
+                  <Text style={styles.sub} numberOfLines={1}>
+                    {item.meta.label}
+                    {item.name ? ` · ${item.phoneNumber}` : ''}
+                    {item.madeBy === 'system' ? ' · System' : ''}
+                  </Text>
+                  <Text style={styles.when}>
+                    {item.ts ? formatTimestamp(item.ts) : 'Unknown time'}
+                  </Text>
+                  {showConnected ? (
+                    <View style={styles.connectedRow}>
+                      <Icon
+                        name={item.connected ? 'check-circle' : 'close-circle'}
+                        size={13}
+                        color={item.connected ? theme.colors.success : theme.colors.textSubtle}
+                      />
+                      <Text
+                        style={[
+                          styles.connectedText,
+                          { color: item.connected ? theme.colors.success : theme.colors.textSubtle },
+                        ]}
+                      >
+                        {item.connected ? 'Connected' : 'Not connected'}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
-              </View>
-              <View style={styles.actionsCol}>
-                <Text style={styles.duration}>
-                  {!item.hasDuration
-                    ? '—'
-                    : item.meta.connected
-                    ? formatDuration(item.durationSec)
-                    : item.meta.label}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => handleDelete(item)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  style={styles.deleteBtn}
-                >
-                  <Icon name="trash-can-outline" size={20} color={theme.colors.danger} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
+                <View style={styles.actionsCol}>
+                  <Text style={styles.duration}>
+                    {!item.hasDuration
+                      ? '—'
+                      : item.meta.connected
+                      ? formatDuration(item.durationSec)
+                      : item.meta.label}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => handleDelete(item)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    style={styles.deleteBtn}
+                  >
+                    <Icon name="trash-can-outline" size={20} color={theme.colors.danger} />
+                  </TouchableOpacity>
+                </View>
+              </RowWrapper>
+            );
+          }}
           ListEmptyComponent={
             <EmptyState
               icon="phone-log"

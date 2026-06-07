@@ -129,11 +129,18 @@ export const summarizeInteractions = (logs, now, cfg) => {
     .filter((x) => x.ts)
     .sort((a, b) => b.ts - a.ts);
 
-  // pendingMissed = consecutive missed calls at the most recent end of the
-  // history, stopping the moment we hit an answered (incoming) or initiated
-  // (outgoing) call. If the user has already talked since the last missed
-  // call, this is 0 and the contact drops out of the "missed to return" lane.
+  // pendingMissed = missed calls that have no CONNECTED call after them. Walking
+  // newest-first, we count missed calls and stop the run only when we hit a call
+  // that actually connected — i.e. a real conversation since. A non-connected
+  // attempt (you called back but they didn't pick up, an IVR/robot, etc.) does
+  // NOT clear the obligation, so it neither counts nor breaks the run. If you've
+  // genuinely spoken since the missed call, this is 0 and the contact drops out
+  // of the "missed to return" lane.
   let pendingMissed = 0;
+  // Timestamp of the most recent missed call — what the missed card displays.
+  // When pendingMissed > 0 this is always the latest *pending* miss (a connected
+  // call newer than it would have zeroed pendingMissed).
+  let lastMissed = 0;
   let streakBroken = false;
 
   sorted.forEach(({ log, ts, type }) => {
@@ -143,6 +150,7 @@ export const summarizeInteractions = (logs, now, cfg) => {
     else if (type === 'incoming') incoming += 1;
     else if (type === 'missed') missed += 1;
     if (ts > last) last = ts;
+    if (type === 'missed' && ts > lastMissed) lastMissed = ts;
     if (isLogConnected(log) && ts > lastConnected) lastConnected = ts;
     if (!first || ts < first) first = ts;
     if (ts >= recentBoundary) last30 += 1;
@@ -154,9 +162,11 @@ export const summarizeInteractions = (logs, now, cfg) => {
     if (!streakBroken) {
       if (type === 'missed') {
         pendingMissed += 1;
-      } else {
+      } else if (isLogConnected(log)) {
+        // A real conversation since the miss(es) clears the obligation.
         streakBroken = true;
       }
+      // else: a non-connected, non-missed call — ignore (don't count, don't break).
     }
   });
 
@@ -187,6 +197,7 @@ export const summarizeInteractions = (logs, now, cfg) => {
     incoming,
     missed,
     pendingMissed,
+    lastMissed,
     totalDurationSec,
     last,
     lastConnected,
@@ -200,20 +211,6 @@ export const summarizeInteractions = (logs, now, cfg) => {
     peakPerMonth,
     recentCalls,
   };
-};
-
-/**
- * Whether a contact is eligible to appear in a reconnect recommendation.
- * Recommendations only nudge you about people you have either:
- *   - never called (no interactions at all), or
- *   - not called in at least `cfg.reconnectMinDays` (default 3 months).
- * Anyone you spoke to more recently than that is deliberately held back so the
- * suggestion lanes stay focused on relationships that have actually gone quiet.
- */
-export const isReconnectEligible = (summary, cfg = DEFAULTS) => {
-  if (!summary || summary.total === 0) return true;
-  if (summary.daysSinceLast === null) return true;
-  return summary.daysSinceLast >= cfg.reconnectMinDays;
 };
 
 /**
@@ -391,21 +388,38 @@ export const analyzeRelationships = ({
   const isSuppressed = (p) => Boolean(p?.remindersSuppressed);
 
   // Reconnect Today: top of the priority queue, excluding never-connected and
-  // recently-reconnected/active. The `isReconnectEligible` gate enforces the
-  // "only suggest people you last spoke to over 3 months ago" rule, so anyone
-  // contacted more recently never lands here regardless of their score.
-  const reconnectToday = profiles
-    .filter(
-      (p) =>
-        p.summary.total > 0 &&
-        isReconnectEligible(p.summary, cfg) &&
-        !p.labels.includes('recently_reconnected') &&
-        !p.labels.includes('consistent') &&
-        p.priority > 0 &&
-        !isSuppressed(p),
-    )
-    .sort((a, b) => b.priority - a.priority)
-    .slice(0, 25);
+  // recently-reconnected/active. Everything but the dormancy gap is fixed here;
+  // the gap is applied via a cascade below.
+  const reconnectCandidate = (p) =>
+    p.summary.total > 0 &&
+    p.summary.daysSinceLast !== null &&
+    !p.labels.includes('recently_reconnected') &&
+    !p.labels.includes('consistent') &&
+    p.priority > 0 &&
+    !isSuppressed(p);
+
+  // Normally we only surface people last spoken to over `reconnectMinDays` (3
+  // months) ago. But on quieter accounts a 3-month gate leaves the lane empty,
+  // so we progressively relax it — 3 months, 1 month, 2 weeks, 1 week — and use
+  // the first threshold that surfaces anyone. `reconnectGapDays` records which
+  // gap actually applied so surfaces can explain it.
+  const reconnectGapFallbacks = [cfg.reconnectMinDays, 30, 14, 7]
+    .filter((d) => d <= cfg.reconnectMinDays)
+    .filter((d, i, arr) => arr.indexOf(d) === i)
+    .sort((a, b) => b - a);
+  let reconnectToday = [];
+  let reconnectGapDays = cfg.reconnectMinDays;
+  for (const gap of reconnectGapFallbacks) {
+    const matches = profiles
+      .filter((p) => reconnectCandidate(p) && p.summary.daysSinceLast >= gap)
+      .sort((a, b) => b.priority - a.priority)
+      .slice(0, 25);
+    if (matches.length) {
+      reconnectToday = matches;
+      reconnectGapDays = gap;
+      break;
+    }
+  }
 
   const lostConnections = profiles
     .filter((p) => p.labels.includes('lost_connection') && !isSuppressed(p))
@@ -435,9 +449,12 @@ export const analyzeRelationships = ({
         !isSuppressed(p),
     )
     .sort((a, b) => {
-      // Most recent missed first.
-      if ((b.summary.last || 0) !== (a.summary.last || 0)) {
-        return (b.summary.last || 0) - (a.summary.last || 0);
+      // Most recent missed first — order by the miss itself, not `last` (which
+      // may be a later non-connected call-back attempt).
+      const am = a.summary.lastMissed || a.summary.last || 0;
+      const bm = b.summary.lastMissed || b.summary.last || 0;
+      if (bm !== am) {
+        return bm - am;
       }
       return b.summary.pendingMissed - a.summary.pendingMissed;
     })
@@ -452,7 +469,12 @@ export const analyzeRelationships = ({
       lostConnections: lostConnections.length,
       consistent: consistent.length,
       recentlyReconnected: recentlyReconnected.length,
+      // Distinct people we have at least one connected call with. When this is
+      // low the app has too little call history to suggest reconnections, so the
+      // home screen nudges the user to make/log calls instead of "all caught up".
+      connectedPeople: profiles.filter((p) => p.summary.lastConnected > 0).length,
     },
+    reconnectGapDays,
     reconnectToday,
     lostConnections,
     neverConnected,

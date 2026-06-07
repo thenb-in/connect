@@ -14,6 +14,7 @@ import {
   reconcileProvisionalCalls,
 } from '../storage';
 import { analyzeRelationships } from './relationshipEngine';
+import { isLogConnected } from '../utils/dateUtils';
 import { loadPhoneBookContacts, ensureContactsPermission } from '../utils/phoneBook';
 import {
   loadDeviceCallLogs,
@@ -24,14 +25,24 @@ import { cleanupContacts } from '../utils/contactsCleanup';
 // The cached call-log snapshot only stores the fields the engine needs, which
 // keeps the MMKV payload small (an unfiltered call log on Android can run
 // into the tens of thousands of rows).
-const slimLog = (log) => ({
-  phoneNumber: log?.phoneNumber || log?.number || log?.phone || '',
-  timestamp:
-    typeof log?.timestamp === 'number' ? log.timestamp : parseInt(log?.timestamp, 10) || null,
-  dateTime: log?.dateTime || null,
-  type: log?.type || log?.callType || null,
-  duration: typeof log?.duration === 'number' ? log.duration : parseInt(log?.duration, 10) || 0,
-});
+const slimLog = (log) => {
+  const duration =
+    typeof log?.duration === 'number' ? log.duration : parseInt(log?.duration, 10) || 0;
+  return {
+    phoneNumber: log?.phoneNumber || log?.number || log?.phone || '',
+    timestamp:
+      typeof log?.timestamp === 'number' ? log.timestamp : parseInt(log?.timestamp, 10) || null,
+    dateTime: log?.dateTime || null,
+    type: log?.type || log?.callType || null,
+    duration,
+    // `connected` is the stored source of truth for "did we actually talk".
+    // Default rule: a call that lasted over a minute counts as connected. The
+    // user can override it per-row in the call-log viewer (e.g. a 2-minute call
+    // that was really an IVR/robot → mark not connected); that override is
+    // flagged `connectedManual` and preserved across re-imports.
+    connected: duration > 60,
+  };
+};
 
 // 2-minute window before the last sync covers small clock skew and entries
 // the OS sometimes writes a moment late.
@@ -117,20 +128,32 @@ export const refreshAnalysis = async (opts = {}) => {
       );
       if (Array.isArray(raw)) {
         const slim = raw.map(slimLog).filter((l) => l.phoneNumber);
-        // Hand-entered ("manual") rows aren't in the device call log, so a full
-        // (non-incremental) import would drop them. Carry them across so a user
-        // who logged a call by hand never loses it on a fresh re-import. In
-        // incremental mode the existing snapshot already holds them, and the
+        // Rows we must carry across a full (non-incremental) re-import, before
+        // the fresh device rows, so mergeCallLogs keeps OUR copy (it dedupes by
+        // phone+timestamp, first-wins):
+        //   - `manual`: hand-entered calls that aren't in the device log at all.
+        //   - `connectedManual`: device calls whose connected flag the user
+        //     overrode — re-deriving from duration would silently undo it.
+        // In incremental mode the existing snapshot already holds both and the
         // merge below preserves them.
-        const manual = (callLogs || []).filter((l) => l?.manual);
+        const preserved = (callLogs || []).filter(
+          (l) => l?.manual || l?.connectedManual,
+        );
         callLogs = incremental
           ? mergeCallLogs(callLogs, slim)
-          : mergeCallLogs(manual, slim);
+          : mergeCallLogs(preserved, slim);
         // Now that the real device rows are in, collapse any optimistic
         // provisional "tap" rows into their actual call-log entry so the
         // monitored truth (real type/duration; missed/no-answer) replaces the
         // guess instead of leaving a duplicate.
         callLogs = reconcileProvisionalCalls(callLogs);
+        // Backfill: any legacy row imported before `connected` was persisted
+        // gets the flag written once (seeded from the duration default). From
+        // here on every read is driven purely by the stored flag — duration only
+        // ever sets the initial value, never overrides a later decision.
+        callLogs = callLogs.map((l) =>
+          typeof l?.connected === 'boolean' ? l : { ...l, connected: isLogConnected(l) },
+        );
         setCallLogs(callLogs);
       }
     } catch (err) {
