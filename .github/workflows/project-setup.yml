@@ -1,0 +1,103 @@
+name: Build APK and Upload Artifact
+
+on:
+  workflow_call:
+    inputs:
+      runner_label:
+        description: |
+          Runner label(s) as a JSON-encoded string. Either a quoted single label
+          (e.g. '"ubuntu-latest"') or a JSON array (e.g. '["self-hosted","Linux"]').
+        type: string
+        default: '"ubuntu-latest"'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build:
+    runs-on: ${{ fromJSON(inputs.runner_label) }}
+
+    steps:
+      - name: Determine ref to checkout
+        id: ref
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            echo "ref=${GITHUB_HEAD_REF}" >> $GITHUB_OUTPUT
+          elif [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            echo "ref=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Extract Git tag name (if release)
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "TAG_NAME=${{ github.ref_name }}" >> $GITHUB_ENV
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          fi
+          echo "TAG_NAME is set to: ${{ env.TAG_NAME }}"
+
+      - name: Android Build
+        id: android-build
+        uses: ./.github/actions/composite_android_build
+        with:
+          RELEASE_STORE_FILE: ${{ secrets.RELEASE_STORE_FILE }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          TAG_NAME: ${{ env.TAG_NAME || '' }}
+
+      - name: Remove old artifacts
+        if: github.event_name != 'release'
+        uses: c-hive/gha-remove-artifacts@v1
+        with:
+            age: '2 days'
+            skip-recent: 2
+
+      - name: Upload AAB to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: "Auto-generated release from CI for version ${{ github.ref_name }}"
+          files: android/app/build/outputs/bundle/release/connect-${{ env.BUILD_VERSION_SUFFIX }}.aab
+
+
+      - name: Upload APK to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: "Auto-generated release from CI for version ${{ github.ref_name }}"
+          path: android/app/build/outputs/apk/release/connect-${{ env.BUILD_VERSION_SUFFIX }}.apk
+
+      - name: Upload APK as workflow artifact (build)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-${{ env.BUILD_VERSION_SUFFIX }}
+          path: android/app/build/outputs/apk/release/connect-${{ env.BUILD_VERSION_SUFFIX }}.apk
+
+      - name: Upload AAB as workflow artifact (build)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-aab-${{ env.BUILD_VERSION_SUFFIX }}
+          path: android/app/build/outputs/bundle/release/connect-${{ env.BUILD_VERSION_SUFFIX }}.aab

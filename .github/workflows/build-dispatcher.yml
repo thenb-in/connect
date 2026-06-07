@@ -1,0 +1,73 @@
+name: Build dispatcher
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  pick-runner:
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.check.outputs.label }}
+    steps:
+      - name: Detect self-hosted runner availability
+        id: check
+        env:
+          # GITHUB_TOKEN cannot list runners (needs repo-admin scope).
+          # Set RUNNERS_READ_TOKEN to a PAT with Administration:Read to enable self-hosted detection.
+          # Without it, the API call 403s and we transparently fall back to ubuntu-latest.
+          GH_TOKEN: ${{ secrets.RUNNERS_READ_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          owner="${GITHUB_REPOSITORY%%/*}"
+          count_online() {
+            local endpoint="$1"
+            local body
+            body=$(gh api "$endpoint" --cache 0 2>/dev/null)
+            if [ -z "$body" ]; then
+              echo ""
+              return
+            fi
+            # Only count online runners that have BOTH self-hosted AND Linux labels
+            echo "$body" | jq '[.runners[] | select(.status == "online" and (.labels | map(.name) | index("self-hosted")) and (.labels | map(.name) | index("Linux")))] | length' 2>/dev/null
+          }
+
+          echo "::group::Repo-level runners (/repos/${{ github.repository }}/actions/runners)"
+          gh api "/repos/${{ github.repository }}/actions/runners" --cache 0 || true
+          echo "::endgroup::"
+          repo_online=$(count_online "/repos/${{ github.repository }}/actions/runners")
+
+          echo "::group::Org-level runners (/orgs/$owner/actions/runners)"
+          gh api "/orgs/$owner/actions/runners" --cache 0 || true
+          echo "::endgroup::"
+          org_online=$(count_online "/orgs/$owner/actions/runners")
+
+          [[ "$repo_online" =~ ^[0-9]+$ ]] || repo_online=0
+          [[ "$org_online" =~ ^[0-9]+$ ]] || org_online=0
+          online=$((repo_online + org_online))
+          echo "Online self-hosted: repo=$repo_online org=$org_online total=$online"
+          if [ "$online" -gt 0 ]; then
+            echo "Self-hosted Linux runners online: $online — using self-hosted+Linux"
+            # JSON-encoded array; project-setup.yml decodes with fromJSON()
+            echo 'label=["self-hosted","Linux"]' >> "$GITHUB_OUTPUT"
+          else
+            echo "No self-hosted Linux runners online — falling back to ubuntu-latest"
+            echo 'label="ubuntu-latest"' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: pick-runner
+    uses: ./.github/workflows/project-setup.yml
+    with:
+      runner_label: ${{ needs.pick-runner.outputs.label }}
+    secrets: inherit

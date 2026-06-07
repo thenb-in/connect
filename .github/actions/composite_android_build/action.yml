@@ -1,0 +1,240 @@
+name: 'Android Build'
+description: 'Build Android AAB and APK files'
+
+inputs:
+  RELEASE_STORE_FILE:
+    description: 'Base64 encoded keystore file (should decode to .keystore)'
+    required: true
+  RELEASE_STORE_PASSWORD:
+    description: 'Keystore password'
+    required: true
+  RELEASE_KEY_ALIAS:
+    description: 'Key alias'
+    required: true
+  RELEASE_KEY_PASSWORD:
+    description: 'Key password'
+    required: true
+  TAG_NAME:
+    description: 'Git tag name (e.g., v1.2.3). When empty, version is set to timestamp-test.'
+    required: false
+
+outputs:
+  VERSION_SUFFIX:
+    description: 'Version suffix used for output filenames (tag name or timestamp-test)'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    # Ensures ANDROID_HOME and cmdline-tools exist on self-hosted runners,
+    # which don't ship the SDK preinstalled (unlike ubuntu-latest).
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        cmdline-tools-version: 14742923
+
+    # 16KB native library alignment requires NDK r27+. The build.gradle pins
+    # 27.1.12297006; install it explicitly so the linker emits .so files with
+    # 16KB-aligned LOAD segments on every CI runner.
+    - name: Install Android NDK 27.1.12297006 (16KB-aligned)
+      shell: bash
+      run: |
+        set -e
+        # setup-android installs cmdline-tools under a versioned dir
+        # (e.g. cmdline-tools/14742923/), not cmdline-tools/latest/. Resolve
+        # sdkmanager from PATH so we don't depend on the "latest" symlink.
+        SDKMANAGER="$(command -v sdkmanager)"
+        yes | "$SDKMANAGER" --licenses >/dev/null || true
+        "$SDKMANAGER" "ndk;27.1.12297006" "build-tools;35.0.0" "platforms;android-35"
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
+        echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        npm install
+        npm install -g react-native-cli
+
+    - name: Print input lengths for debugging
+      shell: bash
+      run: |
+        echo "RELEASE_STORE_FILE length: ${#RELEASE_STORE_FILE}"
+        echo "RELEASE_STORE_PASSWORD length: ${#RELEASE_STORE_PASSWORD}"
+        echo "RELEASE_KEY_ALIAS length: ${#RELEASE_KEY_ALIAS}"
+        echo "RELEASE_KEY_PASSWORD length: ${#RELEASE_KEY_PASSWORD}"
+        echo "TAG_NAME length: ${#TAG_NAME}"
+      env:
+        RELEASE_STORE_FILE: ${{ inputs.RELEASE_STORE_FILE }}
+        RELEASE_STORE_PASSWORD: ${{ inputs.RELEASE_STORE_PASSWORD }}
+        RELEASE_KEY_ALIAS: ${{ inputs.RELEASE_KEY_ALIAS }}
+        RELEASE_KEY_PASSWORD: ${{ inputs.RELEASE_KEY_PASSWORD }}
+        TAG_NAME: ${{ inputs.TAG_NAME }}
+
+    - name: Decode keystore file
+      shell: bash
+      run: |
+        mkdir -p android/app
+        echo "${{ inputs.RELEASE_STORE_FILE }}" | base64 --decode > android/app/release-key.keystore
+
+    - name: Verify keystore file
+      shell: bash
+      run: |
+        ls -l android/app/release-key.keystore
+        command -v file >/dev/null && file android/app/release-key.keystore || echo "(file command not available, skipping type check)"
+        keytool -list -keystore android/app/release-key.keystore -storepass "${{ inputs.RELEASE_STORE_PASSWORD }}" || {
+          echo "Keystore file is invalid or corrupted"
+          exit 1
+        }
+
+    - name: Set signing configs in gradle.properties
+      shell: bash
+      run: |
+        echo "RELEASE_STORE_FILE=release-key.keystore" >> android/gradle.properties
+        echo "RELEASE_STORE_PASSWORD=${{ inputs.RELEASE_STORE_PASSWORD }}" >> android/gradle.properties
+        echo "RELEASE_KEY_ALIAS=${{ inputs.RELEASE_KEY_ALIAS }}" >> android/gradle.properties
+        echo "RELEASE_KEY_PASSWORD=${{ inputs.RELEASE_KEY_PASSWORD }}" >> android/gradle.properties
+
+    - name: Set VERSION_SUFFIX for release (when TAG_NAME is provided)
+      if: ${{ inputs.TAG_NAME }}
+      shell: bash
+      run: |
+        echo "VERSION_SUFFIX=${{ inputs.TAG_NAME }}" >> $GITHUB_OUTPUT
+        echo "BUILD_VERSION_SUFFIX=${{ inputs.TAG_NAME }}" >> $GITHUB_ENV
+
+    - name: Set versionCode and versionName (if TAG_NAME is provided)
+      if: ${{ inputs.TAG_NAME }}
+      shell: bash
+      run: |
+        TAG_NAME="${{ inputs.TAG_NAME }}"
+        VERSION_NAME="${TAG_NAME#v}"
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_NAME"
+        VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+
+        echo "Parsed versionName: $VERSION_NAME"
+        echo "Calculated versionCode: $VERSION_CODE"
+
+         sed -i "/defaultConfig {/,/}/ s/versionCode [0-9]\+/versionCode $VERSION_CODE/" android/app/build.gradle
+         sed -i "/defaultConfig {/,/}/ s/versionName \".*\"/versionName \"$VERSION_NAME\"/" android/app/build.gradle
+
+    - name: Set versionCode and versionName for build (timestamp-test)
+      if: ${{ !inputs.TAG_NAME }}
+      shell: bash
+      run: |
+        BUILD_SUFFIX="$(date +%Y%m%d-%H%M%S)-test"
+        VERSION_CODE=$(date +%s)
+        echo "VERSION_SUFFIX=$BUILD_SUFFIX" >> $GITHUB_OUTPUT
+        echo "BUILD_VERSION_SUFFIX=$BUILD_SUFFIX" >> $GITHUB_ENV
+        echo "Build versionName: $BUILD_SUFFIX, versionCode: $VERSION_CODE"
+        sed -i "/defaultConfig {/,/}/ s/versionCode [0-9]\+/versionCode $VERSION_CODE/" android/app/build.gradle
+        sed -i "/defaultConfig {/,/}/ s/versionName \".*\"/versionName \"$BUILD_SUFFIX\"/" android/app/build.gradle
+
+    - name: Build release AAB and APK
+      shell: bash
+      run: |
+        cd android
+        ./gradlew clean bundleRelease assembleRelease --no-daemon > ../build.log 2>&1
+
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs
+        path: build.log
+        retention-days: 15
+
+    # Re-run zipalign with -P 16 so every .so inside the APK starts on a
+    # 16KB page boundary. AGP 8.5+ does this automatically when
+    # useLegacyPackaging=false, but we re-align defensively and then re-sign
+    # because zipalign must run before apksigner.
+    - name: Align APK to 16KB native library boundaries
+      shell: bash
+      run: |
+        set -euo pipefail
+        BUILD_TOOLS_DIR=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)
+        ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
+        APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+        APK_IN="android/app/build/outputs/apk/release/app-release.apk"
+        APK_TMP="android/app/build/outputs/apk/release/app-release-unsigned-aligned.apk"
+
+        echo "Using build-tools: $BUILD_TOOLS_DIR"
+        "$ZIPALIGN" -c -v -P 16 4 "$APK_IN" || echo "APK not yet 16KB-aligned, re-aligning..."
+        "$ZIPALIGN" -f -v -P 16 4 "$APK_IN" "$APK_TMP"
+        mv "$APK_TMP" "$APK_IN"
+
+        "$APKSIGNER" sign \
+          --ks android/app/release-key.keystore \
+          --ks-pass pass:"$RELEASE_STORE_PASSWORD" \
+          --ks-key-alias "$RELEASE_KEY_ALIAS" \
+          --key-pass pass:"$RELEASE_KEY_PASSWORD" \
+          "$APK_IN"
+
+        "$ZIPALIGN" -c -v -P 16 4 "$APK_IN"
+      env:
+        RELEASE_STORE_PASSWORD: ${{ inputs.RELEASE_STORE_PASSWORD }}
+        RELEASE_KEY_ALIAS: ${{ inputs.RELEASE_KEY_ALIAS }}
+        RELEASE_KEY_PASSWORD: ${{ inputs.RELEASE_KEY_PASSWORD }}
+
+    # Verify every .so shipped inside the APK has 16KB-aligned LOAD segments.
+    # The OS will refuse to mmap libs on 16KB-page devices otherwise, so fail
+    # the build early instead of shipping a broken release.
+    - name: Verify 16KB ELF LOAD segment alignment in .so files
+      shell: bash
+      run: |
+        set -euo pipefail
+        APK="android/app/build/outputs/apk/release/app-release.apk"
+        WORK=$(mktemp -d)
+        unzip -q -o "$APK" "lib/*" -d "$WORK"
+
+        OBJDUMP=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-objdump | head -n1)
+        echo "Using objdump: $OBJDUMP"
+
+        FAIL=0
+        # 64-bit ABIs must have LOAD segments aligned to 0x4000 (16KB).
+        # 32-bit ABIs (armeabi-v7a, x86) keep 4KB pages — they don't run on
+        # 16KB-page devices, so we only assert alignment on 64-bit libs.
+        while IFS= read -r SO; do
+          ABI="$(basename "$(dirname "$SO")")"
+          case "$ABI" in
+            arm64-v8a|x86_64)
+              ALIGN=$("$OBJDUMP" -p "$SO" | awk '/LOAD/ {print $NF; exit}')
+              if [[ "$ALIGN" != "2**14" && "$ALIGN" != "0x4000" && "$ALIGN" != "16384" ]]; then
+                echo "::error file=$SO::LOAD segment alignment is $ALIGN, expected 2**14 (16KB)"
+                FAIL=1
+              else
+                echo "OK   $ABI/$(basename "$SO") -> $ALIGN"
+              fi
+              ;;
+            *)
+              echo "skip $ABI/$(basename "$SO") (32-bit)"
+              ;;
+          esac
+        done < <(find "$WORK/lib" -name '*.so')
+
+        if [[ "$FAIL" -ne 0 ]]; then
+          echo "One or more 64-bit .so files are not 16KB-aligned. See errors above."
+          exit 1
+        fi
+
+    - name: Rename APK and AAB with version suffix
+      shell: bash
+      run: |
+        SUFFIX="${BUILD_VERSION_SUFFIX}"
+        mv android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/connect-${SUFFIX}.apk"
+        mv android/app/build/outputs/bundle/release/app-release.aab "android/app/build/outputs/bundle/release/connect-${SUFFIX}.aab"
+        echo "Outputs: connect-${SUFFIX}.apk, connect-${SUFFIX}.aab"
+
+    - name: Clean gradle.properties
+      shell: bash
+      run: |
+        sed -i '/RELEASE_STORE_FILE\|RELEASE_STORE_PASSWORD\|RELEASE_KEY_ALIAS\|RELEASE_KEY_PASSWORD/d' android/gradle.properties

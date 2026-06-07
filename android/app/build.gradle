@@ -92,17 +92,43 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            // The CI pipeline (composite_android_build) decodes the base64
+            // keystore secret to release-key.keystore and writes the
+            // RELEASE_* properties into gradle.properties. For local release
+            // builds without those properties, fall back to the debug keystore
+            // so `assembleRelease` still works.
+            if (project.hasProperty('RELEASE_STORE_PASSWORD')) {
+                storeFile file('release-key.keystore')
+                storePassword project.property('RELEASE_STORE_PASSWORD')
+                keyAlias project.property('RELEASE_KEY_ALIAS')
+                keyPassword project.property('RELEASE_KEY_PASSWORD')
+            } else {
+                storeFile file('debug.keystore')
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+        }
+    }
+
+    // Android 15 ships devices with 16KB memory page sizes and Google Play
+    // requires apps targeting SDK 35+ to support them by Nov 2025. Keep
+    // jniLibs uncompressed and mmap'd from the APK; the CI pipeline runs
+    // `zipalign -P 16` to align them on 16KB page boundaries.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
         }
     }
 }
