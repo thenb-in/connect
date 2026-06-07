@@ -26,12 +26,10 @@ import ConnectSetupGate from '../components/ConnectSetupGate';
 import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
 import { useMilestones } from '../hooks/useMilestones';
 import {
-  getLastAnalyzedAt,
   WANT_TO_CONNECT_GROUP_ID,
   UNKNOWN_GROUP_ID,
   getShowHiddenCards,
 } from '../storage';
-import { formatTimestamp } from '../utils/dateUtils';
 import { shareApp } from '../utils/appShare';
 import AboutModal from '../components/AboutModal';
 
@@ -368,15 +366,6 @@ const HomeScreen = ({ navigation }) => {
         }
         contentContainerStyle={{ paddingBottom: theme.spacing.xxl }}
       >
-        {(() => {
-          const ts = getLastAnalyzedAt();
-          return ts ? (
-            <Text style={styles.lastSynced}>
-              Contacts refreshed - {formatTimestamp(ts)}
-            </Text>
-          ) : null;
-        })()}
-
         {/* Slot machine: a playful "who should I call?" roller that sits above
             the lanes. Spins up to five people, one per random circle, and
             shares the cards' dismissal counter (re-spin = soft dismiss). */}
@@ -524,14 +513,6 @@ const HomeScreen = ({ navigation }) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
-  lastSynced: {
-    color: theme.colors.primary,
-    fontSize: theme.font.tiny,
-    fontWeight: '600',
-    fontStyle: 'italic',
-    textAlign: 'center',
-    paddingTop: theme.spacing.sm,
-  },
   carousel: {
     paddingLeft: theme.spacing.lg,
     paddingRight: theme.spacing.lg,

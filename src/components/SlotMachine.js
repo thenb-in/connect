@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import { initialsFor } from './ReconnectCard';
@@ -92,28 +92,37 @@ const rollPicks = (
 };
 
 // ---------- Reel animation timing ----------
-const REEL_TICK_MS = 70; // how fast the cycling names flip
-const ROW_SETTLE_BASE = 420; // when the first reel locks in
-const ROW_SETTLE_STEP = 200; // each subsequent reel locks this much later
-const SETTLE_TAIL = 240; // small pad after the last reel settles
+// The whole roll lasts ~2.4s: reels cycle names fast, then lock in one by one,
+// the last landing ~2.2s in for a satisfying "settling" payoff.
+const REEL_TICK_MS = 60; // how fast the cycling names flip
+const SPIN_MS = 2200; // when the LAST reel locks in
+const ROW_SETTLE_STEP = 260; // each earlier reel locks this much sooner
+const SETTLE_TAIL = 220; // small pad after the last reel settles
 
-const rowSettleAt = (i) => ROW_SETTLE_BASE + i * ROW_SETTLE_STEP;
-const spinDuration = (n) => rowSettleAt(Math.max(0, n - 1)) + SETTLE_TAIL;
+// Row i (of n) locks at this elapsed time; the last row lands at SPIN_MS and
+// earlier rows stagger before it.
+const rowSettleAt = (i, n) => Math.max(360, SPIN_MS - (n - 1 - i) * ROW_SETTLE_STEP);
 
 /**
  * A "slot machine" that sits above the home card carousel. It opens showing the
  * total contact count; pressing Spin rolls up to five people — one from each of
- * five randomly-chosen circles — with a brief reel animation. Re-spinning marks
+ * five randomly-chosen circles — with a ~2.4s reel animation. Re-spinning marks
  * the shown people as dismissed (so they sink in the pool), and calling someone
  * replaces just their slot with a fresh face from a different circle.
  */
 const SlotMachine = ({ profiles, totalContacts = 0, onCall, onOpenContact }) => {
   const [phase, setPhase] = useState('idle'); // 'idle' | 'spinning' | 'result'
   const [picks, setPicks] = useState([]);
+  const [settled, setSettled] = useState([]); // per-row "locked in" flags
   const [tick, setTick] = useState(0);
-  const startRef = useRef(0);
   const intervalRef = useRef(null);
-  const timeoutRef = useRef(null);
+  const timeoutsRef = useRef([]);
+  // One pop scale per slot, fired when that reel locks in; a pulse for the idle
+  // Spin button so it quietly invites a tap.
+  const scales = useRef(
+    Array.from({ length: MAX_SLOTS }, () => new Animated.Value(1)),
+  ).current;
+  const pulse = useRef(new Animated.Value(0)).current;
 
   // First-name pool that the reels cycle through while spinning.
   const namePool = useMemo(() => {
@@ -128,35 +137,77 @@ const SlotMachine = ({ profiles, totalContacts = 0, onCall, onOpenContact }) => 
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
+    timeoutsRef.current.forEach(clearTimeout);
+    timeoutsRef.current = [];
   }, []);
 
   useEffect(() => stopTimers, [stopTimers]);
+
+  // Idle button pulse — runs only while the big-number landing is showing.
+  useEffect(() => {
+    if (phase !== 'idle') return undefined;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 750, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 750, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [phase, pulse]);
+
+  const popRow = useCallback(
+    (i) => {
+      const s = scales[i];
+      if (!s) return;
+      s.setValue(0.82);
+      Animated.spring(s, {
+        toValue: 1,
+        useNativeDriver: true,
+        friction: 5,
+        tension: 160,
+      }).start();
+    },
+    [scales],
+  );
 
   const startSpin = useCallback(
     (nextPicks) => {
       stopTimers();
       setPicks(nextPicks);
       if (!nextPicks.length) {
+        setSettled([]);
         setPhase('result'); // nothing eligible — show the empty message
         return;
       }
+      setSettled(nextPicks.map(() => false));
       setPhase('spinning');
       setTick(0);
-      startRef.current = Date.now();
       intervalRef.current = setInterval(
         () => setTick((t) => t + 1),
         REEL_TICK_MS,
       );
-      timeoutRef.current = setTimeout(() => {
-        stopTimers();
-        setPhase('result');
-      }, spinDuration(nextPicks.length));
+      // Lock each reel in turn, popping it as it lands.
+      nextPicks.forEach((_, i) => {
+        timeoutsRef.current.push(
+          setTimeout(() => {
+            setSettled((prev) => {
+              const copy = [...prev];
+              copy[i] = true;
+              return copy;
+            });
+            popRow(i);
+          }, rowSettleAt(i, nextPicks.length)),
+        );
+      });
+      timeoutsRef.current.push(
+        setTimeout(() => {
+          stopTimers();
+          setPhase('result');
+        }, SPIN_MS + SETTLE_TAIL),
+      );
     },
-    [stopTimers],
+    [stopTimers, popRow],
   );
 
   const handleSpin = useCallback(() => {
@@ -192,42 +243,58 @@ const SlotMachine = ({ profiles, totalContacts = 0, onCall, onOpenContact }) => 
         else copy.splice(index, 1); // pool exhausted — just drop the slot
         return copy;
       });
+      if (replacement) popRow(index);
     },
-    [picks, profiles, onCall],
+    [picks, profiles, onCall, popRow],
   );
 
   // ---------- Render ----------
 
+  const Blobs = (
+    <>
+      <View style={styles.blobOne} pointerEvents="none" />
+      <View style={styles.blobTwo} pointerEvents="none" />
+    </>
+  );
+
+  const Header = (
+    <View style={styles.headerRow}>
+      <Icon name="slot-machine" size={16} color={theme.colors.surface} />
+      <Text style={styles.kicker}>WHO TO CALL</Text>
+    </View>
+  );
+
   if (phase === 'idle') {
+    const pulseScale = pulse.interpolate({
+      inputRange: [0, 1],
+      outputRange: [1, 1.05],
+    });
     return (
       <View style={styles.wrap}>
-        <View style={styles.headerRow}>
-          <Icon name="slot-machine" size={16} color={theme.colors.accent} />
-          <Text style={styles.kicker}>WHO TO CALL</Text>
-        </View>
+        {Blobs}
+        {Header}
         <Text style={styles.bigNumber}>{totalContacts}</Text>
         <Text style={styles.bigCaption}>people in your circles</Text>
-        <TouchableOpacity
-          style={styles.spinBtn}
-          activeOpacity={0.85}
-          onPress={handleSpin}
-        >
-          <Icon name="dice-multiple" size={20} color={theme.colors.surface} />
-          <Text style={styles.spinBtnText}>Spin</Text>
-        </TouchableOpacity>
+        <Animated.View style={{ transform: [{ scale: pulseScale }] }}>
+          <TouchableOpacity
+            style={styles.spinBtn}
+            activeOpacity={0.85}
+            onPress={handleSpin}
+          >
+            <Icon name="dice-multiple" size={22} color={theme.colors.surface} />
+            <Text style={styles.spinBtnText}>Spin to connect</Text>
+          </TouchableOpacity>
+        </Animated.View>
       </View>
     );
   }
 
   const spinning = phase === 'spinning';
-  const elapsed = Date.now() - startRef.current;
 
   return (
     <View style={styles.wrap}>
-      <View style={styles.headerRow}>
-        <Icon name="slot-machine" size={16} color={theme.colors.accent} />
-        <Text style={styles.kicker}>WHO TO CALL</Text>
-      </View>
+      {Blobs}
+      {Header}
 
       {picks.length === 0 ? (
         <View style={styles.emptyWrap}>
@@ -239,52 +306,62 @@ const SlotMachine = ({ profiles, totalContacts = 0, onCall, onOpenContact }) => 
       ) : (
         <View style={styles.reels}>
           {picks.map((pk, i) => {
-            const settled = !spinning || elapsed >= rowSettleAt(i);
-            const name = settled
+            const isSettled = phase === 'result' || settled[i];
+            const name = isSettled
               ? pk.profile.contact?.name || firstNameOf()
               : namePool[(tick + i * 2) % namePool.length];
             return (
-              <View
+              <Animated.View
                 key={`${i}-${pk.profile.contact?.normalized}`}
-                style={styles.row}
+                style={[
+                  styles.row,
+                  isSettled && styles.rowSettled,
+                  { transform: [{ scale: scales[i] || 1 }] },
+                ]}
               >
                 <View
                   style={[
                     styles.avatar,
-                    settled && {
-                      backgroundColor: pk.group?.color || theme.colors.primary,
+                    isSettled && {
+                      backgroundColor: pk.group?.color || theme.colors.accent,
                     },
                   ]}
                 >
                   <Text style={styles.avatarText}>
-                    {settled ? initialsFor(pk.profile.contact?.name) : '?'}
+                    {isSettled ? initialsFor(pk.profile.contact?.name) : '?'}
                   </Text>
                 </View>
                 <TouchableOpacity
                   style={styles.rowBody}
-                  activeOpacity={settled ? 0.6 : 1}
-                  disabled={!settled}
+                  activeOpacity={isSettled ? 0.6 : 1}
+                  disabled={!isSettled}
                   onPress={() => onOpenContact?.(pk.profile)}
                 >
                   <Text
-                    style={[styles.rowName, !settled && styles.rowNameSpin]}
+                    style={[styles.rowName, !isSettled && styles.rowNameSpin]}
                     numberOfLines={1}
                   >
                     {name}
                   </Text>
-                  <Text style={styles.rowGroup} numberOfLines={1}>
-                    {settled ? pk.group?.name || ' ' : ' '}
-                  </Text>
+                  {isSettled && pk.group?.name ? (
+                    <View style={styles.groupPill}>
+                      <Text style={styles.groupPillText} numberOfLines={1}>
+                        {pk.group.name}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.rowSpinHint}>spinning…</Text>
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.callBtn, !settled && styles.callBtnIdle]}
+                  style={[styles.callBtn, !isSettled && styles.callBtnIdle]}
                   activeOpacity={0.85}
-                  disabled={!settled}
+                  disabled={!isSettled}
                   onPress={() => handleCall(i)}
                 >
                   <Icon name="phone" size={18} color={theme.colors.surface} />
                 </TouchableOpacity>
-              </View>
+              </Animated.View>
             );
           })}
         </View>
@@ -296,9 +373,9 @@ const SlotMachine = ({ profiles, totalContacts = 0, onCall, onOpenContact }) => 
         disabled={spinning}
         onPress={handleReroll}
       >
-        <Icon name="dice-multiple" size={18} color={theme.colors.primary} />
+        <Icon name="dice-multiple" size={18} color={theme.colors.surface} />
         <Text style={styles.rerollBtnText}>
-          {picks.length ? 'Spin again' : 'Spin'}
+          {spinning ? 'Spinning…' : picks.length ? 'Spin again' : 'Spin'}
         </Text>
       </TouchableOpacity>
     </View>
@@ -307,43 +384,61 @@ const SlotMachine = ({ profiles, totalContacts = 0, onCall, onOpenContact }) => 
 
 const styles = StyleSheet.create({
   wrap: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.primary,
     borderRadius: theme.radius.lg,
     marginHorizontal: theme.spacing.lg,
     marginTop: theme.spacing.md,
     marginBottom: theme.spacing.md,
     padding: theme.spacing.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    shadowColor: theme.colors.cardShadow,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 12,
-    elevation: 3,
+    overflow: 'hidden',
+    shadowColor: theme.colors.primaryDark,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  blobOne: {
+    position: 'absolute',
+    top: -56,
+    right: -44,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  blobTwo: {
+    position: 'absolute',
+    bottom: -64,
+    left: -34,
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: 'rgba(255,255,255,0.07)',
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   kicker: {
-    color: theme.colors.textSubtle,
+    color: theme.colors.surface,
     fontSize: theme.font.tiny,
     fontWeight: '800',
     letterSpacing: 1.5,
     marginLeft: 6,
+    opacity: 0.92,
   },
   bigNumber: {
-    fontSize: 56,
-    fontWeight: '800',
-    color: theme.colors.primary,
+    fontSize: 64,
+    fontWeight: '900',
+    color: theme.colors.surface,
     textAlign: 'center',
     marginTop: theme.spacing.sm,
   },
   bigCaption: {
     fontSize: theme.font.small,
-    color: theme.colors.textMuted,
+    color: 'rgba(255,255,255,0.82)',
     textAlign: 'center',
-    marginBottom: theme.spacing.md,
+    marginBottom: theme.spacing.lg,
   },
   spinBtn: {
     flexDirection: 'row',
@@ -352,7 +447,11 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.accent,
     borderRadius: theme.radius.pill,
     paddingVertical: theme.spacing.md,
-    marginTop: theme.spacing.xs,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
   },
   spinBtnText: {
     color: theme.colors.surface,
@@ -366,15 +465,20 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderRadius: theme.radius.md,
     paddingVertical: theme.spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.colors.divider,
+    paddingHorizontal: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  rowSettled: {
+    backgroundColor: 'rgba(255,255,255,0.16)',
   },
   avatar: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: theme.colors.chipBg,
+    backgroundColor: 'rgba(255,255,255,0.22)',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: theme.spacing.md,
@@ -389,29 +493,44 @@ const styles = StyleSheet.create({
   },
   rowName: {
     fontSize: theme.font.h3,
-    fontWeight: '700',
-    color: theme.colors.text,
+    fontWeight: '800',
+    color: theme.colors.surface,
   },
   rowNameSpin: {
-    color: theme.colors.textSubtle,
+    color: 'rgba(255,255,255,0.7)',
     fontStyle: 'italic',
+    fontWeight: '600',
   },
-  rowGroup: {
-    fontSize: theme.font.small,
-    color: theme.colors.textMuted,
-    marginTop: 1,
+  groupPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 2,
+    marginTop: 3,
+    maxWidth: '100%',
+  },
+  groupPillText: {
+    color: theme.colors.surface,
+    fontSize: theme.font.tiny,
+    fontWeight: '700',
+  },
+  rowSpinHint: {
+    color: 'rgba(255,255,255,0.55)',
+    fontSize: theme.font.tiny,
+    marginTop: 4,
   },
   callBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: theme.colors.success,
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: theme.spacing.sm,
   },
   callBtnIdle: {
-    backgroundColor: theme.colors.chipBg,
+    backgroundColor: 'rgba(255,255,255,0.18)',
   },
   rerollBtn: {
     flexDirection: 'row',
@@ -419,15 +538,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: theme.radius.pill,
     paddingVertical: theme.spacing.md,
-    marginTop: theme.spacing.md,
+    marginTop: theme.spacing.sm,
     borderWidth: 1.5,
-    borderColor: theme.colors.primary,
+    borderColor: 'rgba(255,255,255,0.55)',
   },
   rerollBtnDisabled: {
-    opacity: 0.5,
+    opacity: 0.6,
   },
   rerollBtnText: {
-    color: theme.colors.primary,
+    color: theme.colors.surface,
     fontSize: theme.font.body,
     fontWeight: '800',
     marginLeft: theme.spacing.sm,
@@ -439,11 +558,11 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: theme.font.h3,
     fontWeight: '800',
-    color: theme.colors.text,
+    color: theme.colors.surface,
   },
   emptyBody: {
     fontSize: theme.font.small,
-    color: theme.colors.textMuted,
+    color: 'rgba(255,255,255,0.82)',
     textAlign: 'center',
     marginTop: 4,
   },

@@ -19,6 +19,7 @@ import {
   clearConnectStorage,
   clearConnectStorageSelective,
   clearOnboardingAcks,
+  getLastAnalyzedAt,
   getAdvancedMode,
   setAdvancedMode,
   getShowHiddenCards,
@@ -47,6 +48,7 @@ import {
   sendWhatsAppMessage,
   shareApp,
 } from '../utils/appShare';
+import { formatTimestamp } from '../utils/dateUtils';
 
 const STEP_REFLECT = 'reflect';
 const STEP_SELECT = 'select';
@@ -275,6 +277,15 @@ const SettingsScreen = ({ navigation }) => {
     <View style={styles.container}>
       <AppHeader title="Settings" />
       <ScrollView contentContainerStyle={styles.scroll}>
+        {(() => {
+          const ts = getLastAnalyzedAt();
+          return ts ? (
+            <Text style={styles.refreshedAt}>
+              Contacts refreshed - {formatTimestamp(ts)}
+            </Text>
+          ) : null;
+        })()}
+
         <Text style={[styles.sectionLabel, styles.sectionLabelFirst]}>
           Share & support
         </Text>
@@ -938,6 +949,14 @@ const styles = StyleSheet.create({
     marginLeft: theme.spacing.xs,
   },
   sectionLabelFirst: { marginTop: 0 },
+  refreshedAt: {
+    color: theme.colors.textSubtle,
+    fontSize: theme.font.tiny,
+    fontWeight: '600',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginBottom: theme.spacing.lg,
+  },
   card: {
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.lg,
