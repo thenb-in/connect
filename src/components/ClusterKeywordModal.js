@@ -59,7 +59,7 @@ const ClusterChip = React.memo(({ cluster, selected, onToggle }) => (
  *
  * Clusters with more than AUTO_SELECT_MIN_MEMBERS members start ticked.
  */
-const ClusterKeywordModal = ({ visible, clusters = [], onConfirm, onSkip }) => {
+const ClusterKeywordModal = ({ visible, clusters = [], onConfirm }) => {
   // Set of selected cluster ids. Seeded from the big-cluster auto-select rule
   // every time the modal opens so a re-open starts from a sensible default.
   const [selected, setSelected] = useState(() => new Set());
@@ -101,7 +101,7 @@ const ClusterKeywordModal = ({ visible, clusters = [], onConfirm, onSkip }) => {
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={onSkip}
+      onRequestClose={handleConfirm}
     >
       <View style={styles.backdrop}>
         <View style={styles.card}>
@@ -119,7 +119,7 @@ const ClusterKeywordModal = ({ visible, clusters = [], onConfirm, onSkip }) => {
           >
             {sorted.length === 0 ? (
               <Text style={styles.emptyText}>
-                No recurring name keywords found. You can skip this step.
+                No recurring name keywords found. Tap Continue to proceed.
               </Text>
             ) : (
               <View style={styles.chipWrap}>
@@ -136,12 +136,6 @@ const ClusterKeywordModal = ({ visible, clusters = [], onConfirm, onSkip }) => {
           </ScrollView>
 
           <View style={styles.footer}>
-            <TouchableOpacity
-              style={[styles.footerBtn, styles.btnGhost]}
-              onPress={onSkip}
-            >
-              <Text style={styles.btnGhostText}>Skip</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               style={[styles.footerBtn, styles.btnPrimary]}
               onPress={handleConfirm}

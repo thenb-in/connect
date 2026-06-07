@@ -26,13 +26,23 @@ import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
 import { useMilestones } from '../hooks/useMilestones';
 import {
   getLastAnalyzedAt,
-  CATEGORIES,
   WANT_TO_CONNECT_GROUP_ID,
+  UNKNOWN_GROUP_ID,
   getShowHiddenCards,
 } from '../storage';
 import { formatTimestamp } from '../utils/dateUtils';
 import { shareApp } from '../utils/appShare';
 import AboutModal from '../components/AboutModal';
+
+// Fisher-Yates shuffle (returns a new array; never mutates the input).
+const shuffle = (arr) => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
 
 /**
  * The Connect Mode home dashboard. Built to feel like a "morning reflection"
@@ -96,27 +106,40 @@ const HomeScreen = ({ navigation }) => {
       // doNotRemind / helpers.
       if (p.remindersSuppressed) return;
       (p.groups || []).forEach((g) => {
-        if (g?.doNotRemind || g?.categoryId === 'helpers') return;
+        // Skip helpers and do-not-remind groups, and the synthetic "Unknown"
+        // catch-all (the group literally named Unknown that holds everyone in
+        // no real group). But KEEP real groups that merely sit in the Unknown
+        // *category* — e.g. the name-token clusters from onboarding ("Rao",
+        // "IITB") default to categoryId 'unknown' yet are genuine circles worth
+        // saying hi from.
+        if (
+          g?.doNotRemind ||
+          g?.categoryId === 'helpers' ||
+          g?.id === UNKNOWN_GROUP_ID
+        ) {
+          return;
+        }
         const arr = byGroup.get(g.id) || [];
         arr.push(p);
         byGroup.set(g.id, arr);
       });
     });
+    // Shuffle across BOTH groups and names: walk groups in random order, and
+    // within each pick a random member who hasn't been suggested yet. Deduping
+    // by contact means a person who's in many groups doesn't hog every slot, so
+    // the lane spreads suggestions over as many different circles as possible.
     const out = [];
-    byGroup.forEach((members, groupId) => {
-      const pick = members[Math.floor(Math.random() * members.length)];
-      if (!pick) return;
+    const usedContacts = new Set();
+    shuffle([...byGroup.keys()]).forEach((groupId) => {
+      const members = shuffle(byGroup.get(groupId) || []);
+      const pick = members.find(
+        (p) => !usedContacts.has(p.contact?.normalized),
+      );
+      if (!pick) return; // everyone in this group is already suggested elsewhere
+      usedContacts.add(pick.contact?.normalized);
       const group = pick.groups?.find((g) => g.id === groupId);
       out.push({ profile: pick, group });
     });
-    // Order by category (friends, then family/relatives, then office/colleagues,
-    // ...) so this lane matches the "Important groups" ordering.
-    const categoryOrder = new Map(CATEGORIES.map((c, i) => [c.id, i]));
-    const rank = ({ group }) =>
-      categoryOrder.has(group?.categoryId)
-        ? categoryOrder.get(group.categoryId)
-        : CATEGORIES.length;
-    out.sort((a, b) => rank(a) - rank(b));
     return out.slice(0, 10);
   }, [analysis]);
 
@@ -152,11 +175,12 @@ const HomeScreen = ({ navigation }) => {
   const includeMissed =
     missedConnections.length > 0 || Platform.OS === 'android' || showHidden;
 
-  // Too little call history to make reconnect suggestions yet (a fresh install,
-  // or iOS before any calls have been tracked). Drives the Reconnect card's
-  // empty state: nudge the user to make/log calls so we gather history, instead
-  // of claiming they're "all caught up". Needs at least a few connected people
-  // before the lane is meaningful.
+  // Too little call history for the reconnect lane to be meaningful (a fresh
+  // install, or iOS before any calls have been tracked). Needs at least a few
+  // connected people. Gates the Reconnect card: when there's no reconnect data
+  // and not enough history, the card is hidden entirely (rather than nudging
+  // for a lane that can't work yet). It also picks the empty-state copy when the
+  // card does show (e.g. under "show hidden cards").
   const notEnoughData = (analysis?.counts?.connectedPeople || 0) < 3;
 
   // The spotlight carousel, one card per lane. Order, left → right:
@@ -190,9 +214,14 @@ const HomeScreen = ({ navigation }) => {
           emptyBody: "You've returned everyone's calls.",
         }
       : null;
+    // Show Reconnect when there's someone to reconnect with, or "show hidden
+    // cards" is on. With no reconnect data, only show it once there's enough
+    // call history to be meaningful (≥3 connected people, i.e. !notEnoughData);
+    // a brand-new user with too little data sees nothing here rather than a
+    // nudge for a lane that can't work yet.
     const reconnectCard =
-      reconnectToday.length || showHidden || notEnoughData
-        ? {
+      reconnectToday.length || showHidden || !notEnoughData
+        ? { 
             key: 'reconnect',
             variant: 'primary',
             color: theme.colors.primary,

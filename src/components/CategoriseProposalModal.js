@@ -1095,12 +1095,12 @@ const CategoriseProposalModal = ({
           </ScrollView>
 
           <View style={styles.footer}>
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={[styles.footerBtn, styles.btnGhost]}
               onPress={onCancel}
             >
               <Text style={styles.btnGhostText}>Cancel</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
             {showCustomise ? (
               <TouchableOpacity
                 style={[styles.footerBtn, styles.btnSecondary]}

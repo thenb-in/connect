@@ -18,6 +18,7 @@ import AppHeader from '../components/AppHeader';
 import {
   clearConnectStorage,
   clearConnectStorageSelective,
+  clearOnboardingAcks,
   getAdvancedMode,
   setAdvancedMode,
   getShowHiddenCards,
@@ -27,7 +28,7 @@ import {
   getLlmKeys,
   getUserProfile,
   hasLlmKey,
-  isSetupCompleted,
+  isOnboardingComplete,
   userProfileEntryCount,
   LLM_PROVIDER_META,
 } from '../storage';
@@ -167,6 +168,10 @@ const SettingsScreen = ({ navigation }) => {
       clearConnectStorage();
     } else {
       clearConnectStorageSelective(scopes);
+      // A selective wipe leaves the step table set, but the Done step resets the
+      // app back to onboarding regardless. Clear the table (the gate) so the user
+      // lands on the welcome splash (step 1) rather than mid-setup.
+      clearOnboardingAcks();
     }
     setStep(STEP_DONE);
   };
@@ -209,7 +214,7 @@ const SettingsScreen = ({ navigation }) => {
   } = useRecategorise();
 
   const onRecategorise = useCallback(() => {
-    if (!isSetupCompleted()) {
+    if (!isOnboardingComplete()) {
       Alert.alert(
         'Set up Connect first',
         'Finish Connect setup so we have your contacts to categorise.',

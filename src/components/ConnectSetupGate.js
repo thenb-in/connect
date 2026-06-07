@@ -4,7 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import ConnectSetupButton from './ConnectSetupButton';
-import { isSetupCompleted } from '../storage';
+import { isOnboardingComplete } from '../storage';
 
 /**
  * Gates Connect screen bodies behind the onboarding flag. When Connect setup
@@ -13,15 +13,16 @@ import { isSetupCompleted } from '../storage';
  * empty-state copy (e.g. "Nothing pressing right now") when the real reason
  * for empty data is that setup never happened.
  *
- * Re-checks isOnboarded() on every focus so a flip elsewhere in the app is
+ * Re-checks onboarding completeness on every focus so a flip elsewhere in the
+ * app — including an OS permission revoke, which the derived gate detects — is
  * picked up without needing a remount.
  */
 const ConnectSetupGate = ({ children }) => {
-  const [ready, setReady] = useState(isSetupCompleted());
+  const [ready, setReady] = useState(isOnboardingComplete());
 
   useFocusEffect(
     useCallback(() => {
-      setReady(isSetupCompleted());
+      setReady(isOnboardingComplete());
     }, []),
   );
 

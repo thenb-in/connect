@@ -21,11 +21,8 @@ import {
   requestImportPermissions,
 } from '../engine/analysisService';
 import {
-  setOnboarded,
-  setSetupCompleted,
-  getOnboardingProgress,
-  setOnboardingProgress,
-  clearOnboardingProgress,
+  getOnboardingAcks,
+  markOnboardingStep,
   getPermsState,
   getLlmConfig,
   hasLlmKey,
@@ -47,7 +44,9 @@ import {
   isHelperContact,
 } from '../engine/categorization';
 import CategoriseProposalModal from '../components/CategoriseProposalModal';
-import ClusterKeywordModal from '../components/ClusterKeywordModal';
+import ClusterKeywordModal, {
+  AUTO_SELECT_MIN_MEMBERS,
+} from '../components/ClusterKeywordModal';
 import ContactPickerModal from '../components/ContactPickerModal';
 import UserContextModal from '../components/UserContextModal';
 import { useRecategorise } from '../hooks/useRecategorise';
@@ -147,16 +146,16 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
 
   const initialPerms = getPermsState();
   const initialLlm = getLlmConfig();
-  // Snapshot of a previous (interrupted) onboarding run. Null on a fresh
-  // install. We only resume the *pre-work* decisions — that the user got past
-  // the welcome splash, and any "Skip for now" they tapped on the LLM-key /
-  // about-you steps. The work stage (cluster → choose-who → analyse) is a
-  // single live run with modals and async LLM calls that can't survive a kill,
-  // so it deliberately always restarts clean: persisting its done/skipped
-  // sub-states would otherwise mark clustering "done" before setup actually
-  // finished and skip it on the next attempt. Cleared on completion and on a
-  // full data wipe.
-  const savedProgress = getOnboardingProgress();
+  // Resume snapshot from the onboarding step table (src/onboarding/steps.js).
+  // We rehydrate the "Skip for now" decisions the user tapped on the LLM-key /
+  // about-you steps so those cards don't re-nag after a restart. The welcome
+  // splash is intentionally NOT resumed past (see `started` below) — onboarding
+  // always reopens at welcome until the analysis finishes. The work stage
+  // (cluster → choose-who → analyse) is a single live run with modals and async
+  // LLM calls that can't survive a kill, so it restarts clean; only its terminal
+  // `analysed` ack is persisted, written after the engine run succeeds. Acks are
+  // cleared on a full data wipe / reset.
+  const savedAcks = getOnboardingAcks();
   const [perms, setPerms] = useState({
     contacts: initialPerms.contacts,
     callLog: initialPerms.callLog,
@@ -164,19 +163,26 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [done, setDone] = useState(false);
+  // True while the "Use defaults" path is running its non-interactive setup
+  // (request perms → import → auto-cluster → analyse). Drives the same
+  // "Setting up Connect…" overlay as `done`, but without the auto-enter timer.
+  const [preparingDefaults, setPreparingDefaults] = useState(false);
 
   // First impression: a plain "Welcome to Connect" splash with a single Start
   // button. The setup steps (Advanced toggle, permissions, clustering, …) stay
   // hidden behind the header until the user taps Start, so they aren't dropped
-  // straight into a wall of options. Resumes past the splash if a prior run got
-  // that far.
-  const [started, setStarted] = useState(Boolean(savedProgress?.started));
+  // straight into a wall of options. We always begin at the splash: this screen
+  // only renders while onboarding is incomplete (the `analysed` step hasn't
+  // run), and the rule is to restart from welcome until that analysis finishes —
+  // a prior splash tap or a half-done permission grant doesn't skip it. Granted
+  // permissions still show as done (derived), so re-running is one tap away.
+  const [started, setStarted] = useState(false);
 
   // Latches true once clustering + the grouping review are done. The flow then
   // pauses back on the onboarding screen — the "Choose who to connect with"
   // picker only opens when the user taps Continue, rather than springing up on
   // its own the moment grouping finishes. Always starts false: this is work-
-  // stage state, not resumed across a kill (see savedProgress above).
+  // stage state, not resumed across a kill (see the savedAcks note above).
   const [clusterStageDone, setClusterStageDone] = useState(false);
 
   // Advanced mode opt-in (persisted). When off, onboarding is a quick import +
@@ -200,7 +206,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   const [llmState, setLlmState] = useState(
     initialLlm.key
       ? 'granted'
-      : savedProgress?.llmState === 'skipped'
+      : savedAcks.llmKey
       ? 'skipped'
       : 'pending',
   );
@@ -213,7 +219,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   const [contextState, setContextState] = useState(
     hasUserProfile()
       ? 'granted'
-      : savedProgress?.contextState === 'skipped'
+      : savedAcks.userContext
       ? 'skipped'
       : 'pending',
   );
@@ -243,6 +249,12 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
 
   const handleSkipKey = () => {
     setLlmState('skipped');
+    markOnboardingStep('llmKey');
+  };
+
+  const handleSkipContext = () => {
+    setContextState('skipped');
+    markOnboardingStep('userContext');
   };
 
   // Per-stage progress for the cluster + analyse steps so the user sees each
@@ -294,18 +306,35 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   // the no-LLM-key path (immediately).
   const finishOnboarding = useCallback(async () => {
     setProgress((p) => ({ ...p, analyse: 'running' }));
-    await refreshAnalysis({
-      refreshContacts: false,
-      refreshCallLogs: perms.callLog === 'granted',
-    });
+    try {
+      const imported = await refreshAnalysis({
+        refreshContacts: false,
+        refreshCallLogs: perms.callLog === 'granted',
+      });
+      // If call-log access was granted but the import itself errored (silent
+      // permission revoke, content-provider hiccup), the cache holds no call
+      // log and Home's "Missed connections" lane would be empty. Treat that as
+      // a failed setup: leave onboarding incomplete so the next launch returns
+      // here to retry, rather than entering Connect with no data.
+      if (perms.callLog === 'granted' && imported?.refreshError) {
+        throw new Error(imported.refreshError);
+      }
+    } catch (err) {
+      // Setup didn't complete — do NOT mark `analysed`. A kill or import error
+      // before this point leaves the ack false, so reopening the app brings the
+      // user back to onboarding instead of a half-set-up Home.
+      setProgress((p) => ({ ...p, analyse: 'pending' }));
+      setAnalyzing(false);
+      return;
+    }
     setProgress((p) => ({ ...p, analyse: 'granted' }));
 
-    setOnboarded(true);
-    setSetupCompleted(true);
-    // Setup is done — drop the resume snapshot so a later re-run (e.g. via the
-    // "Set up Connect" button after a reset) starts clean rather than rehydrating
-    // a fully-granted flow.
-    clearOnboardingProgress();
+    // Genuine success only: now that contacts + call log are imported and the
+    // engine has run, mark onboarding complete and enter Connect. `analysed` is
+    // the atomic gate ack — flipping it only here means a kill mid-analysis
+    // leaves it false and the next launch re-runs the work stage by itself.
+    markOnboardingStep('wantToConnect');
+    markOnboardingStep('analysed');
     setDone(true);
     setAnalyzing(false);
   }, [perms.callLog]);
@@ -406,13 +435,6 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
     [keywordContacts, completeClusterStage],
   );
 
-  const onKeywordSkip = useCallback(() => {
-    setKeywordModalOpen(false);
-    setSelectedClusters([]);
-    setProgress((p) => ({ ...p, cluster: 'skipped' }));
-    completeClusterStage();
-  }, [completeClusterStage]);
-
   // Review modal confirmed: commit the (possibly edited) clusters as real
   // groups, then run the analysis.
   const onLocalApply = useCallback(
@@ -458,6 +480,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
       }
       setWantPickerOpen(false);
       setProgress((p) => ({ ...p, wantToConnect: 'granted' }));
+      markOnboardingStep('wantToConnect');
       finishOnboarding();
     },
     [finishOnboarding],
@@ -466,6 +489,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   const onWantToConnectSkip = useCallback(() => {
     setWantPickerOpen(false);
     setProgress((p) => ({ ...p, wantToConnect: 'skipped' }));
+    markOnboardingStep('wantToConnect');
     finishOnboarding();
   }, [finishOnboarding]);
 
@@ -539,6 +563,97 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
     else if (navigation?.replace) navigation.replace('ConnectHome');
   }, [onFinished, navigation]);
 
+  // "Use defaults for now" on the welcome splash: run setup non-interactively
+  // with sensible defaults instead of bypassing it. We request permissions,
+  // import contacts + (Android) call log, auto-cluster, and analyse — so Home
+  // lands with real data (the missed-connections lane, reconnect suggestions,
+  // …) rather than an empty shell.
+  const handleUseDefaults = useCallback(async () => {
+    // The user made the welcome-splash decision; record it so a kill mid-defaults
+    // resumes past the splash rather than re-prompting.
+    markOnboardingStep('welcome');
+    setPreparingDefaults(true);
+    try {
+      // 1. Permissions + import. requestImportPermissions persists the perms
+      //    shape itself; we mirror it locally and use the fresh result (state
+      //    updates are async, so `perms` would be stale within this tick).
+      const { perms: granted } = await requestImportPermissions();
+      setPerms(granted);
+      const imported = await refreshAnalysis({
+        refreshContacts: granted.contacts === 'granted',
+        refreshCallLogs: granted.callLog === 'granted',
+      });
+      // Call-log access was granted but the import errored → the cache has no
+      // call log and Home's "Missed connections" lane would be empty. Treat as
+      // a failed setup so we don't mark onboarding complete below (the catch
+      // returns the user to onboarding to retry).
+      if (granted.callLog === 'granted' && imported?.refreshError) {
+        throw new Error(imported.refreshError);
+      }
+
+      // 2. Seed the standard groups ("Want to connect", …).
+      ensureStandardGroups();
+
+      // 3. Clustering with defaults — "take what we already have": apply the
+      //    big name-token clusters the keyword picker would auto-tick
+      //    (count > AUTO_SELECT_MIN_MEMBERS) as groups, without prompting.
+      //    Helpers are filtered out first, exactly as runClusterAndAnalyse does.
+      const contacts = getContacts().filter((c) => !isHelperContact(c));
+      const bigClusters = Object.values(buildCandidateClusters({ contacts }))
+        .filter(isNameTokenCluster)
+        .filter((c) => (c.members?.length || 0) > AUTO_SELECT_MIN_MEMBERS);
+      if (bigClusters.length) {
+        setSelectedClusters(
+          bigClusters.map((c) => ({
+            id: c.id,
+            name: c.name,
+            token: (c.name || '').replace(/^Cluster:\s*/i, ''),
+            categoryId: c.categoryId,
+            members: c.members,
+            count: c.members.length,
+          })),
+        );
+        applyProposal(
+          {
+            source: 'local',
+            groups: bigClusters.map((c) => ({
+              name: (c.name || '').replace(/^Cluster:\s*/i, ''),
+              categoryId: c.categoryId || 'unknown',
+              members: c.members,
+            })),
+            nameByPhone: Object.fromEntries(
+              contacts.map((c) => [c.normalized, c.name]),
+            ),
+            allowNewGroups: true,
+          },
+          { allowNewGroups: true },
+        );
+      }
+
+      // 4. Final analysis so the new groups + call-log data show up on Home.
+      await refreshAnalysis({
+        refreshContacts: false,
+        refreshCallLogs: granted.callLog === 'granted',
+      });
+
+      // Genuine success only: now that import + analysis have actually run, mark
+      // the gate steps complete and enter Connect. Keeping these OUT of a
+      // `finally` means a kill or import error before this point leaves
+      // `analysed` false, so the app reopens to onboarding instead of a
+      // half-set-up Home with an empty missed-connections lane.
+      markOnboardingStep('wantToConnect');
+      markOnboardingStep('analysed');
+      // Leave `preparingDefaults` true through navigation — the overlay covers
+      // the splash until handleEnter replaces this screen.
+      handleEnter();
+    } catch (err) {
+      // Setup didn't complete (permission/import error or interruption). Drop
+      // the overlay and return to the onboarding screen so the user can retry;
+      // do NOT mark onboarded.
+      setPreparingDefaults(false);
+    }
+  }, [handleEnter]);
+
   // Once setup finishes we show a brief loading screen and auto-enter Connect
   // after a short beat — no "Enter Connect" tap required.
   useEffect(() => {
@@ -547,18 +662,13 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
     return () => clearTimeout(t);
   }, [done, handleEnter]);
 
-  // Persist only the pre-work decisions (past the splash; explicit LLM/about-you
-  // skips) so an app kill mid-setup doesn't drop the user back at the welcome
-  // screen or re-prompt a step they already dismissed. The work stage
-  // (clusterStageDone / progress) is intentionally NOT saved — it must restart
-  // clean on resume (see savedProgress note above). We stop once `done`:
-  // finishOnboarding already cleared the snapshot, and writing here would just
-  // resurrect it. Permissions, advanced mode, the LLM key and the user profile
-  // each persist themselves elsewhere, so they're not duplicated here.
-  useEffect(() => {
-    if (done) return;
-    setOnboardingProgress({ started, llmState, contextState });
-  }, [started, llmState, contextState, done]);
+  // The pre-work decisions are persisted at the moment the user makes them, by
+  // marking the matching step in the onboarding table (welcome on Start/Use
+  // defaults; llmKey on skip; userContext on skip). The work stage
+  // (clusterStageDone / progress) is intentionally NOT persisted — it restarts
+  // clean on resume, with only its terminal `analysed` ack written on success.
+  // Permissions, advanced mode, the LLM key and the user profile each persist
+  // themselves elsewhere, so nothing extra is duplicated here.
 
   const permsReady =
     perms.contacts === 'granted' &&
@@ -656,13 +766,25 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
           </View>
 
           {!started ? (
-            <TouchableOpacity
-              style={[styles.primaryBtn, styles.welcomeBtn]}
-              onPress={() => setStarted(true)}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.primaryBtnText}>Start</Text>
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity
+                style={[styles.primaryBtn, styles.welcomeBtn]}
+                onPress={() => {
+                  markOnboardingStep('welcome');
+                  setStarted(true);
+                }}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.primaryBtnText}>Personalize Connect</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.skipBtn}
+                onPress={handleUseDefaults}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.skipBtnText}>Use defaults for now</Text>
+              </TouchableOpacity>
+            </>
           ) : null}
         </View>
 
@@ -793,7 +915,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
               <View style={styles.llmBtnRow}>
                 <TouchableOpacity
                   style={[styles.llmBtn, styles.llmBtnSecondary]}
-                  onPress={() => setContextState('skipped')}
+                  onPress={handleSkipContext}
                 >
                   <Text style={styles.llmBtnSecondaryText}>Skip for now</Text>
                 </TouchableOpacity>
@@ -933,7 +1055,6 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
         visible={keywordModalOpen}
         clusters={keywordClusters}
         onConfirm={onKeywordConfirm}
-        onSkip={onKeywordSkip}
       />
 
       <CategoriseProposalModal
@@ -957,10 +1078,10 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
         visible={contextOpen}
         onClose={() => setContextOpen(false)}
         onSaved={() => setContextState('granted')}
-        onSkipped={() => setContextState('skipped')}
+        onSkipped={handleSkipContext}
       />
 
-      {done ? (
+      {done || preparingDefaults ? (
         <View style={styles.loadingOverlay}>
           <View
             style={[
@@ -1022,6 +1143,16 @@ const styles = StyleSheet.create({
   welcomeBtn: {
     marginTop: theme.spacing.xl,
     minWidth: 200,
+  },
+  skipBtn: {
+    marginTop: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+  },
+  skipBtnText: {
+    color: theme.colors.textMuted,
+    fontSize: theme.font.small,
+    fontWeight: '600',
   },
   bodyWrap: {
     flex: 1,

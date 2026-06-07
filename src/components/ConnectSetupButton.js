@@ -3,23 +3,20 @@ import { TouchableOpacity, Text, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useNavigation } from '@react-navigation/native';
 import theme from '../theme';
-import {
-  setOnboarded as setConnectOnboarded,
-  setSetupCompleted as setConnectSetupCompleted,
-} from '../storage';
+import { clearOnboardingAcks } from '../storage';
 
 /**
- * Pill-style entry-point into Connect Mode setup. Resets the onboarding flag
- * so the setup screen is shown again, then routes the user to it — finding
- * the right navigator whether the button is rendered inside the Connect
+ * Pill-style entry-point into Connect Mode setup. Clears the onboarding step
+ * table so the setup screen is shown again, then routes the user to it —
+ * finding the right navigator whether the button is rendered inside the Connect
  * stack or from a sibling stack (e.g. the auth screens).
  *
  * Props:
  *   - scale: number — multiplier for icon/text size on responsive screens.
  *   - style: ViewStyle — override container styles.
  *   - label: string — button text (defaults to "Connect setup").
- *   - resetOnboarding: bool — if false, do not flip the onboarded flag (use
- *     when the caller already manages that state).
+ *   - resetOnboarding: bool — if false, do not clear the step table (use when
+ *     the caller already manages that state).
  */
 const ConnectSetupButton = ({
   scale = 1,
@@ -31,8 +28,9 @@ const ConnectSetupButton = ({
 
   const handlePress = () => {
     if (resetOnboarding) {
-      setConnectOnboarded(false);
-      setConnectSetupCompleted(false);
+      // Clear the step table (the gate) so onboarding genuinely restarts from
+      // the welcome splash.
+      clearOnboardingAcks();
     }
     let nav = navigation;
     while (nav) {

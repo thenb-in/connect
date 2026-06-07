@@ -1,26 +1,40 @@
+import { Platform } from 'react-native';
 import { storage } from './mmkv';
 import { normalizeLast10 } from './utils/phone';
 import { readJson, writeJson } from './utils/syncStoreMmkv';
 import { getLogTimestamp, isLogConnected } from './utils/dateUtils';
 import bundledMilestones from './data/milestones.json';
+import {
+  isOnboardingCompleteForCtx,
+  firstIncompleteStep,
+  evaluateSteps,
+} from './onboarding/steps';
 
 // All Connect Mode local state lives behind the `connect.*` namespace so it
 // never collides with CRM Mode keys. Connect Mode is local-first: nothing
 // here is required to be synced with the backend.
 const K = {
-  ONBOARDED: 'connect.onboarded',
+  // Legacy completion flag from the pre-step-table onboarding. No longer
+  // written; read once by migrateOnboardingState() to backfill the step table
+  // for upgrading users, then consumed (deleted). The step table (below) is the
+  // single source of truth.
   SETUP_COMPLETED: 'connect.setupCompleted',
-  // Pre-work onboarding decisions so a mid-setup app kill doesn't drop the user
-  // back at the welcome splash or re-prompt a step they already skipped. Stores
-  // { started, llmState, contextState } only — the work stage (clustering →
-  // choose-who → analyse) is deliberately NOT tracked here so it restarts clean
-  // on resume rather than being marked done before setup actually finished.
-  // Cleared once setup completes and by a full data wipe (clearConnectStorage
-  // walks every key here).
-  ONBOARDING_PROGRESS: 'connect.onboardingProgress',
+  // The step-status table: the single authority for app entry and onboarding
+  // resume. Stores only one-way decisions with no live OS signal to re-derive
+  // from ({ welcome, llmKey, userContext, wantToConnect, analysed }) — permission
+  // steps derive live from PERMS instead (see src/onboarding/steps.js). Walked
+  // by clearConnectStorage on a full wipe like every key here.
+  ONBOARDING_ACKS: 'connect.onboardingAcks',
   CONTACTS: 'connect.contacts',
   CALL_LOGS: 'connect.callLogs',
   LAST_ANALYZED_AT: 'connect.lastAnalyzedAt',
+  // Timestamp of the first time a FULL device call-log import succeeded. This is
+  // the real "we have a complete baseline" signal — distinct from "the cache is
+  // non-empty", which can be true from a single provisional dialer row or an
+  // interrupted setup. Incremental (delta) imports are only safe once this is
+  // set; until then every refresh re-imports the full log, which self-heals
+  // installs whose cache was only ever partially populated.
+  CALL_LOG_BASELINE_AT: 'connect.callLogBaselineAt',
   GROUPS: 'connect.groups',
   CONTACT_GROUPS: 'connect.contactGroups',
   // Name-token clusters the user picked during onboarding's local clustering
@@ -106,36 +120,73 @@ const CATEGORY_IDS = new Set(CATEGORIES.map((c) => c.id));
 export const getCategoryById = (id) =>
   CATEGORIES.find((c) => c.id === id) || CATEGORIES.find((c) => c.id === CATEGORY_ID.UNKNOWN);
 
-// ---------- Onboarding ----------
+// ---------- Onboarding step table ----------
+// The acks map holds the one-way "this step is done" decisions. See
+// src/onboarding/steps.js for the registry that turns these (plus live perms,
+// advanced mode, key/profile presence) into a single completeness verdict.
 
-export const isOnboarded = () => Boolean(storage.getBoolean(K.ONBOARDED));
+export const getOnboardingAcks = () => readJson(K.ONBOARDING_ACKS, {});
 
-export const setOnboarded = (value) => storage.set(K.ONBOARDED, Boolean(value));
-
-// True only after the user actually completes the analyze step. The
-// `onboarded` flag flips true on "I will set this up later" too, so the
-// gate uses this stricter signal to decide whether to show setup-pending.
-export const isSetupCompleted = () => Boolean(storage.getBoolean(K.SETUP_COMPLETED));
-
-export const setSetupCompleted = (value) =>
-  storage.set(K.SETUP_COMPLETED, Boolean(value));
-
-// Persisted onboarding progress so a returning user who killed the app
-// mid-setup lands back on the step they reached instead of the welcome splash.
-// Null until onboarding starts; cleared when setup completes and by a full
-// data wipe. The shape is owned by OnboardingScreen — storage just stows it.
-export const getOnboardingProgress = () => readJson(K.ONBOARDING_PROGRESS, null);
-
-export const setOnboardingProgress = (progress) => {
-  if (!progress) {
-    storage.delete(K.ONBOARDING_PROGRESS);
-    return;
-  }
-  writeJson(K.ONBOARDING_PROGRESS, progress);
+// Idempotent set-true. Returns the new map.
+export const markOnboardingStep = (key) => {
+  const acks = getOnboardingAcks();
+  if (acks[key]) return acks;
+  acks[key] = true;
+  writeJson(K.ONBOARDING_ACKS, acks);
+  return acks;
 };
 
-export const clearOnboardingProgress = () =>
-  storage.delete(K.ONBOARDING_PROGRESS);
+export const clearOnboardingAcks = () => storage.delete(K.ONBOARDING_ACKS);
+
+// One-time bridge so users who completed the OLD multi-flag onboarding
+// (SETUP_COMPLETED=true, no acks map) aren't bounced back through it. We backfill
+// the step table, then CONSUME the legacy flag (delete it) so it can never
+// resurrect completion after a deliberate acks-clear (delete-data / reset).
+// Permission steps still derive live, which stays correct. Runs from
+// buildOnboardingCtx; the acks-map presence check short-circuits it once seeded.
+const migrateOnboardingState = () => {
+  if (storage.getString(K.ONBOARDING_ACKS)) return; // already have a table
+  if (storage.getBoolean(K.SETUP_COMPLETED)) {
+    writeJson(K.ONBOARDING_ACKS, {
+      welcome: true,
+      llmKey: true,
+      userContext: true,
+      wantToConnect: true,
+      analysed: true,
+    });
+  }
+  storage.delete(K.SETUP_COMPLETED); // consume the legacy signal
+};
+
+// Live snapshot consumed by the step registry. Reads the OS permission state
+// fresh so the gate always reflects reality (a revoke re-opens onboarding).
+export const buildOnboardingCtx = () => {
+  migrateOnboardingState();
+  return {
+    platform: Platform.OS,
+    perms: getPermsState(),
+    acks: getOnboardingAcks(),
+  };
+};
+
+// Dev-only: dump the step-by-step gate evaluation to the console so the
+// onboarding decision is observable in dev tools. Shows each step's
+// applicable/complete/satisfied state, the first blocker, and the verdict.
+const logOnboardingGate = (ctx, complete, firstBlocker) => {
+  if (typeof __DEV__ === 'undefined' || !__DEV__) return;
+  console.log(
+    `[onboarding] gate → ${complete ? 'COMPLETE (Home)' : `incomplete, resume at "${firstBlocker?.key}"`}`,
+    { platform: ctx.platform, perms: ctx.perms, acks: ctx.acks },
+  );
+  (console.table || console.log)(evaluateSteps(ctx));
+};
+
+export const isOnboardingComplete = () => {
+  const ctx = buildOnboardingCtx();
+  const complete = isOnboardingCompleteForCtx(ctx);
+  logOnboardingGate(ctx, complete, complete ? null : firstIncompleteStep(ctx));
+  return complete;
+};
 
 export const getPermsState = () =>
   readJson(K.PERMS, { contacts: 'unknown', callLog: 'unknown' });
@@ -303,6 +354,16 @@ export const getLastAnalyzedAt = () => storage.getNumber(K.LAST_ANALYZED_AT) || 
 
 export const setLastAnalyzedAt = (ms) =>
   storage.set(K.LAST_ANALYZED_AT, Number(ms) || Date.now());
+
+// True once a full device call-log import has ever completed. Gates whether a
+// refresh may take the cheap incremental (delta) path; see CALL_LOG_BASELINE_AT.
+export const hasCallLogBaseline = () =>
+  (storage.getNumber(K.CALL_LOG_BASELINE_AT) || 0) > 0;
+
+export const setCallLogBaseline = (ms) =>
+  storage.set(K.CALL_LOG_BASELINE_AT, Number(ms) || Date.now());
+
+export const clearCallLogBaseline = () => storage.delete(K.CALL_LOG_BASELINE_AT);
 
 // ---------- Groups ----------
 // Groups are sub-labels (e.g. "IIT-B batch", "Company A colleagues",
@@ -1100,7 +1161,7 @@ export const clearConnectStorage = () => {
 const SCOPE_KEYS = {
   llmKey: [K.LLM_PROVIDER, K.LLM_KEY, K.LLM_KEYS, K.LLM_ACTIVE, K.GEMINI_MODEL],
   groups: [K.GROUPS, K.CONTACT_GROUPS, K.MANUAL_CONTACTS, K.LAST_CATEGORIZED_AT, K.CACHED_PROPOSAL],
-  callLogs: [K.CALL_LOGS, K.LAST_ANALYZED_AT],
+  callLogs: [K.CALL_LOGS, K.LAST_ANALYZED_AT, K.CALL_LOG_BASELINE_AT],
   contacts: [K.CONTACTS, K.DONT_SUGGEST],
   notes: [K.NOTES],
   goals: [K.GOALS],
@@ -1330,11 +1391,16 @@ export const applyConnectImport = (payload, scopes) => {
     });
     applied.push(scope);
   });
-  // If the user is restoring real data on a fresh install, flip the
-  // onboarding flags so they land on Home instead of the welcome screen.
+  // If the user is restoring real data on a fresh install, seed the step table
+  // so they land on Home instead of the welcome screen.
   if (applied.includes('contacts') || applied.includes('groups')) {
-    storage.set(K.ONBOARDED, true);
-    storage.set(K.SETUP_COMPLETED, true);
+    writeJson(K.ONBOARDING_ACKS, {
+      welcome: true,
+      llmKey: true,
+      userContext: true,
+      wantToConnect: true,
+      analysed: true,
+    });
   }
   return { applied, skipped };
 };

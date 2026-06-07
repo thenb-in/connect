@@ -6,6 +6,8 @@ import {
   setCallLogs,
   setLastAnalyzedAt,
   getLastAnalyzedAt,
+  hasCallLogBaseline,
+  setCallLogBaseline,
   getReconnects,
   getContactGroupMap,
   getGroups,
@@ -107,14 +109,23 @@ export const refreshAnalysis = async (opts = {}) => {
     // instant on devices with large call logs, instead of re-reading every
     // row from the content provider each time.
     //
-    // Crucially, we only go incremental when we actually have a prior call-log
-    // snapshot to merge into. `lastAnalyzedAt` can be set by a run that never
-    // imported call logs at all — e.g. the onboarding stage that imports
-    // contacts only, or analysis that ran before call-log permission was
-    // granted. In those cases the cache is empty and a 2-minute delta would
-    // silently skip the user's entire call history, so we force a full import.
+    // Crucially, we only go incremental once a FULL import has actually
+    // completed at least once (the call-log baseline). `lastAnalyzedAt` and a
+    // non-empty cache are NOT sufficient signals on their own:
+    //   - `lastAnalyzedAt` can be set by a run that never imported call logs
+    //     (the onboarding stage that imports contacts only, or analysis that ran
+    //     before call-log permission was granted).
+    //   - `callLogs.length > 0` can be true from a single optimistic provisional
+    //     "tap" row, or from a setup that was interrupted after writing only a
+    //     partial snapshot.
+    // In both cases a 2-minute delta would silently skip the user's entire call
+    // history — the bug where an established install shows an empty
+    // "Missed connections" lane forever. Until the baseline is recorded, every
+    // refresh re-imports the full log, which self-heals those installs on the
+    // next focus/refresh without forcing the user back through onboarding.
     const lastSync = getLastAnalyzedAt();
-    const incremental = lastSync > 0 && callLogs.length > 0;
+    const incremental =
+      hasCallLogBaseline() && lastSync > 0 && callLogs.length > 0;
     try {
       // throwOnDeny so a silent permission revoke surfaces as a real error
       // instead of returning [] and wiping the cached snapshot below.
@@ -155,6 +166,13 @@ export const refreshAnalysis = async (opts = {}) => {
           typeof l?.connected === 'boolean' ? l : { ...l, connected: isLogConnected(l) },
         );
         setCallLogs(callLogs);
+        // Record the baseline once a full device import has actually landed, so
+        // subsequent refreshes can safely take the cheap incremental path. We do
+        // this only on the full-import branch — an incremental delta is, by
+        // definition, not a complete snapshot.
+        if (!incremental) {
+          setCallLogBaseline();
+        }
       }
     } catch (err) {
       console.warn('[connect/analysis] call log refresh failed:', err?.message || err);
