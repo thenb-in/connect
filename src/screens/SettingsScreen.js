@@ -75,11 +75,6 @@ const DELETE_SCOPES = [
     description: 'Anything you typed into Contact Detail notes.',
   },
   {
-    id: 'reconnects',
-    title: 'Reconnect history',
-    description: 'When you last reached out to each person.',
-  },
-  {
     id: 'goals',
     title: 'Goals',
     description: 'Soft goals like "reconnect with 5 people this week".',

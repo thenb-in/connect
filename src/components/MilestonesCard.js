@@ -91,7 +91,7 @@ const HeroBadge = ({ milestone }) => {
 };
 
 const SecondaryRow = ({ milestone }) => {
-  const { title, icon, value, target, achieved, progress } = milestone;
+  const { title, description, icon, value, target, achieved, progress } = milestone;
   return (
     <View style={styles.row}>
       <View style={[styles.iconWrap, achieved && styles.iconWrapAchieved]}>
@@ -110,6 +110,11 @@ const SecondaryRow = ({ milestone }) => {
             {achieved ? 'Earned' : `${Math.min(value, target)} / ${target}`}
           </Text>
         </View>
+        {description ? (
+          <Text style={styles.rowDesc} numberOfLines={1}>
+            {description}
+          </Text>
+        ) : null}
         <View style={styles.track}>
           <View
             style={[
@@ -294,6 +299,11 @@ const styles = StyleSheet.create({
   },
   rowCountAchieved: {
     color: theme.colors.success,
+  },
+  rowDesc: {
+    fontSize: theme.font.tiny,
+    color: theme.colors.textMuted,
+    marginTop: 1,
   },
   track: {
     height: 6,

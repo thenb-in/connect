@@ -230,7 +230,7 @@ const ContactDetailScreen = ({ navigation, route }) => {
         </View>
 
         <View style={styles.metaCard}>
-          <Meta label="Last spoke" value={formatDate(summary.last)} />
+          <Meta label="Last spoke" value={formatDate(summary.lastConnected) || '—'} />
           <Meta
             label="First seen"
             value={formatDate(summary.first)}

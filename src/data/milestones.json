@@ -19,6 +19,14 @@
       "icon": "account-multiple-check-outline"
     },
     {
+      "id": "people-10",
+      "type": "people",
+      "title": "Finding your rhythm",
+      "description": "Reconnect with 10 people",
+      "target": 10,
+      "icon": "account-multiple-outline"
+    },
+    {
       "id": "people-25",
       "type": "people",
       "title": "Reaching out",
@@ -27,12 +35,28 @@
       "icon": "account-group-outline"
     },
     {
+      "id": "people-50",
+      "type": "people",
+      "title": "In full swing",
+      "description": "Reconnect with 50 people",
+      "target": 50,
+      "icon": "account-group"
+    },
+    {
       "id": "people-100",
       "type": "people",
       "title": "Connector",
       "description": "Reconnect with 100 people",
       "target": 100,
       "icon": "account-heart-outline"
+    },
+    {
+      "id": "people-250",
+      "type": "people",
+      "title": "Keeper of the circle",
+      "description": "Reconnect with 250 people",
+      "target": 250,
+      "icon": "account-heart"
     },
     {
       "id": "streak-3",
@@ -51,12 +75,52 @@
       "icon": "calendar-week"
     },
     {
+      "id": "streak-14",
+      "type": "streak",
+      "title": "Two strong weeks",
+      "description": "Reach out fourteen days in a row",
+      "target": 14,
+      "icon": "calendar-range"
+    },
+    {
       "id": "streak-30",
       "type": "streak",
       "title": "A month of warmth",
       "description": "Reach out thirty days in a row",
       "target": 30,
       "icon": "calendar-heart"
+    },
+    {
+      "id": "streak-100",
+      "type": "streak",
+      "title": "Unbreakable",
+      "description": "Reach out a hundred days in a row",
+      "target": 100,
+      "icon": "trophy-award"
+    },
+    {
+      "id": "weekly-3",
+      "type": "weekly",
+      "title": "A busy week",
+      "description": "Reconnect with 3 people in a single week",
+      "target": 3,
+      "icon": "lightning-bolt-outline"
+    },
+    {
+      "id": "weekly-5",
+      "type": "weekly",
+      "title": "Reconnection sprint",
+      "description": "Reconnect with 5 people in a single week",
+      "target": 5,
+      "icon": "lightning-bolt"
+    },
+    {
+      "id": "weekly-10",
+      "type": "weekly",
+      "title": "On a roll",
+      "description": "Reconnect with 10 people in a single week",
+      "target": 10,
+      "icon": "rocket-launch-outline"
     }
   ]
 }

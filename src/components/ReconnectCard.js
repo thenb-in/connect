@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import { WANT_TO_CONNECT_GROUP_ID } from '../storage';
+import { calendarDaysSince, formatClockTime } from '../utils/dateUtils';
 
 /**
  * Builds a single, gentle reason string describing why this contact is being
@@ -23,8 +24,25 @@ const reasonForProfile = (profile) => {
     return `Strong past communication, quiet for ${summary.daysSinceLast} days`;
   }
   if (summary.pendingMissed > 0) {
-    return summary.pendingMissed === 1
-      ? 'You have a missed call to return'
+    // pendingMissed > 0 means the most recent interaction is a missed call, so
+    // `summary.last` is exactly when that call came in. Use the calendar-day
+    // count (not the elapsed-ms `daysSinceLast`) so a call last night reads
+    // "yesterday", not "today".
+    const days = calendarDaysSince(summary.last);
+    const when = relativeDays(days);
+    // For a same-day or previous-day miss the clock time is meaningful, so pin
+    // it ("yesterday at 10:27 PM"); older misses just read the relative day.
+    const at =
+      days !== null && days <= 1 && formatClockTime(summary.last)
+        ? `${when} at ${formatClockTime(summary.last)}`
+        : when;
+    if (summary.pendingMissed === 1) {
+      return at
+        ? `Missed call ${at}`
+        : 'You have a missed call to return';
+    }
+    return at
+      ? `${summary.pendingMissed} missed calls, latest ${at}`
       : `You have ${summary.pendingMissed} missed calls to return`;
   }
   if (summary.daysSinceLast === null) {
@@ -33,18 +51,28 @@ const reasonForProfile = (profile) => {
   if (summary.daysSinceLast >= 30) {
     return `No contact in ${summary.daysSinceLast} days`;
   }
-  return 'Worth keeping in touch';
+  return '';  // kept blank to remove crowding when the reason is just "recently contacted"
 };
 
-const formatLastSpoke = (summary) => {
-  if (!summary.last) return 'Never';
-  const d = summary.daysSinceLast;
-  if (d === 0) return 'Today';
-  if (d === 1) return 'Yesterday';
+// Compact "how long ago" label from a day count, e.g. "Today", "3d ago".
+// Returns '' when the day count is unusable so callers can fall back gracefully.
+const relativeDays = (d) => {
+  if (d === null || d === undefined || Number.isNaN(d)) return '';
+  if (d <= 0) return 'today';
+  if (d === 1) return 'yesterday';
   if (d < 7) return `${d}d ago`;
   if (d < 30) return `${Math.round(d / 7)}w ago`;
   if (d < 365) return `${Math.round(d / 30)}mo ago`;
   return `${Math.round(d / 365)}y ago`;
+};
+
+const formatLastSpoke = (summary) => {
+  // "Spoke" means an actual connected call — a missed/rejected call doesn't
+  // count, so read the connected-only recency, not the any-interaction `last`.
+  if (!summary.lastConnected) return 'Never';
+  const label = relativeDays(calendarDaysSince(summary.lastConnected));
+  // Capitalise the leading word to match the original card styling.
+  return label ? label.charAt(0).toUpperCase() + label.slice(1) : 'Never';
 };
 
 const initialsFor = (name) => {

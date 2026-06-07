@@ -8,6 +8,8 @@
 //
 //   - "people": connect with X distinct people (lifetime count)
 //   - "streak": reach out on Y consecutive days
+//   - "weekly": reconnect with Z distinct people within a rolling 7-day window
+//     (a momentum burst — earned once and kept, even after the week passes)
 //
 // The engine never reads from storage; callers pass the reconnect map in. That
 // keeps it trivial to unit test and lets the UI choose the data window.
@@ -29,7 +31,8 @@ const localDayIndex = (ts) => {
  * @param {Object} reconnects - { [normalizedPhone]: timestampMs }
  * @param {number} [now]
  * @returns {{ totalPeople:number, currentStreakDays:number,
- *            longestStreakDays:number, lastReconnectAt:number }}
+ *            longestStreakDays:number, lastReconnectAt:number,
+ *            reconnectsThisWeek:number }}
  */
 export const computeReconnectStats = (reconnects = {}, now = Date.now()) => {
   const timestamps = Object.values(reconnects || {})
@@ -43,10 +46,16 @@ export const computeReconnectStats = (reconnects = {}, now = Date.now()) => {
       currentStreakDays: 0,
       longestStreakDays: 0,
       lastReconnectAt: 0,
+      reconnectsThisWeek: 0,
     };
   }
 
   const lastReconnectAt = Math.max(...timestamps);
+
+  // Distinct people whose most recent reconnect falls in the last 7 days — the
+  // "this week" momentum signal that the home scoreboard used to show.
+  const weekAgo = now - 7 * DAY_MS;
+  const reconnectsThisWeek = timestamps.filter((t) => t >= weekAgo).length;
 
   // Unique calendar days that had at least one reconnect, ascending.
   const days = [...new Set(timestamps.map(localDayIndex))].sort((a, b) => a - b);
@@ -77,7 +86,13 @@ export const computeReconnectStats = (reconnects = {}, now = Date.now()) => {
     }
   }
 
-  return { totalPeople, currentStreakDays, longestStreakDays, lastReconnectAt };
+  return {
+    totalPeople,
+    currentStreakDays,
+    longestStreakDays,
+    lastReconnectAt,
+    reconnectsThisWeek,
+  };
 };
 
 /**
@@ -93,6 +108,10 @@ export const valueForMilestone = (type, stats) => {
       // Reward the best streak the user has ever achieved so a milestone that
       // was earned doesn't "un-earn" itself once the current streak lapses.
       return Math.max(stats.currentStreakDays || 0, stats.longestStreakDays || 0);
+    case 'weekly':
+      // Momentum within the trailing 7 days. Earned milestones persist via
+      // achievedAt, so a quiet week never strips a badge already won.
+      return stats.reconnectsThisWeek || 0;
     default:
       return 0;
   }

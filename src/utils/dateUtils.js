@@ -20,6 +20,19 @@ export const endOfDay = (d) => {
 };
 
 /**
+ * Number of whole calendar days between `ts` and now (local time), e.g. a call
+ * at 10pm last night returns 1 even though only a few hours have elapsed. Use
+ * this for "today / yesterday / Nd ago" labels — a raw elapsed-ms floor would
+ * call last night "today". Returns null for falsy/unusable input.
+ */
+export const calendarDaysSince = (ts, now = new Date()) => {
+  const t = typeof ts === 'number' ? ts : parseInt(ts, 10);
+  if (!Number.isFinite(t) || t <= 0) return null;
+  const days = Math.round((startOfDay(now) - startOfDay(new Date(t))) / 86400000);
+  return Math.max(0, days);
+};
+
+/**
  * Formats a Date/number/string as a short human-readable date, e.g. "15 Apr 2026".
  * Returns an empty string for falsy input.
  */
@@ -71,6 +84,23 @@ export const formatShortDateTime = (timestamp) => {
 };
 
 /**
+ * Formats a numeric (ms) or string-parseable timestamp as a clock time only,
+ * e.g. "10:27 PM". Useful for pairing with a relative day label like
+ * "yesterday". Returns an empty string when the timestamp is unusable.
+ */
+export const formatClockTime = (timestamp) => {
+  const t = typeof timestamp === 'number' ? timestamp : parseInt(timestamp, 10);
+  if (!Number.isFinite(t)) {
+    return '';
+  }
+  return new Date(t).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+};
+
+/**
  * Formats a call duration given in seconds as a compact human string, e.g.
  * "45s", "5m 12s", "1h 03m". Returns "0s" for a zero/negative/unusable input
  * (e.g. a missed or rejected call that never connected).
@@ -105,4 +135,18 @@ export const getLogTimestamp = (log) => {
     return Number.isFinite(t) ? t : 0;
   }
   return 0;
+};
+
+/**
+ * Whether a call-log row counts as a connected (answered) call. Prefers an
+ * explicit stored `connected` flag — system-recorded reconnect rows set it true
+ * with a blank duration — and otherwise falls back to the app-wide "lasted over
+ * a minute" rule. The single source of truth for "did this call connect?", used
+ * by the call-log viewer, the storage layer, and the reconnect query.
+ */
+export const isLogConnected = (log) => {
+  if (typeof log?.connected === 'boolean') {
+    return log.connected;
+  }
+  return (Math.max(0, parseInt(log?.duration, 10) || 0)) > 60;
 };

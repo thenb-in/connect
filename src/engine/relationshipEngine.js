@@ -1,4 +1,5 @@
 import { normalizeLast10 } from '../utils/phone';
+import { isLogConnected } from '../utils/dateUtils';
 import { CATEGORY_ID } from '../storage';
 
 // ---------------------------------------------------------------------------
@@ -104,6 +105,10 @@ export const summarizeInteractions = (logs, now, cfg) => {
   let missed = 0;
   let totalDurationSec = 0;
   let last = 0;
+  // `last` is the most recent interaction of ANY kind (including missed /
+  // rejected); `lastConnected` is the most recent call that actually connected.
+  // "Last spoke" must read the latter — a missed call is not a conversation.
+  let lastConnected = 0;
   let first = 0;
   let last30 = 0;
   let last90 = 0;
@@ -138,6 +143,7 @@ export const summarizeInteractions = (logs, now, cfg) => {
     else if (type === 'incoming') incoming += 1;
     else if (type === 'missed') missed += 1;
     if (ts > last) last = ts;
+    if (isLogConnected(log) && ts > lastConnected) lastConnected = ts;
     if (!first || ts < first) first = ts;
     if (ts >= recentBoundary) last30 += 1;
     if (ts >= midBoundary) last90 += 1;
@@ -160,6 +166,8 @@ export const summarizeInteractions = (logs, now, cfg) => {
   });
 
   const daysSinceLast = last ? Math.floor((now - last) / DAY_MS) : null;
+  const daysSinceLastConnected =
+    lastConnected ? Math.floor((now - lastConnected) / DAY_MS) : null;
   const spanDays = first && last ? Math.max(1, Math.floor((last - first) / DAY_MS)) : 0;
 
   // Slim, newest-first tail of individual calls so the UI can render a per
@@ -181,11 +189,13 @@ export const summarizeInteractions = (logs, now, cfg) => {
     pendingMissed,
     totalDurationSec,
     last,
+    lastConnected,
     first,
     last30,
     last90,
     last365,
     daysSinceLast,
+    daysSinceLastConnected,
     spanDays,
     peakPerMonth,
     recentCalls,

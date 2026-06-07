@@ -1,6 +1,7 @@
 import { storage } from './mmkv';
 import { normalizeLast10 } from './utils/phone';
 import { readJson, writeJson } from './utils/syncStoreMmkv';
+import { getLogTimestamp, isLogConnected } from './utils/dateUtils';
 import bundledMilestones from './data/milestones.json';
 
 // All Connect Mode local state lives behind the `connect.*` namespace so it
@@ -25,7 +26,6 @@ const K = {
   // edited by hand. The categoriser skips these on re-runs so manual
   // corrections never get overwritten by the LLM.
   MANUAL_CONTACTS: 'connect.manualContacts',
-  RECONNECTS: 'connect.reconnects',
   NOTES: 'connect.notes',
   GOALS: 'connect.goals',
   PREFERRED_MODE: 'connect.preferredMode',
@@ -127,13 +127,31 @@ export const setCallLogs = (logs) => writeJson(K.CALL_LOGS, logs || []);
 // `manual: true` so a full device re-import — which replaces the whole
 // snapshot — preserves it (see analysisService). Returns the stored entry, or
 // null when no usable number was supplied.
-export const addCallLog = ({ phoneNumber, type, timestamp, duration } = {}) => {
+//
+// `madeBy` audits who created the row: 'user' for hand-logged calls (the
+// default), 'system' for app-recorded reconnect taps. `connected` can be forced
+// (system reconnect rows are connected with a blank duration); when omitted it
+// falls back to the app-wide "lasted over a minute" rule.
+export const addCallLog = ({
+  phoneNumber,
+  type,
+  timestamp,
+  duration,
+  connected,
+  madeBy = 'user',
+} = {}) => {
+  const hasDuration = duration !== null && duration !== undefined && duration !== '';
+  const durationSec = hasDuration ? Math.max(0, parseInt(duration, 10) || 0) : null;
   const entry = {
     phoneNumber: (phoneNumber || '').toString().trim(),
     timestamp: Number(timestamp) || Date.now(),
     dateTime: null,
     type: type || null,
-    duration: Math.max(0, parseInt(duration, 10) || 0),
+    duration: durationSec,
+    // A call counts as "connected" only when it actually lasted over a minute,
+    // unless the caller forces the flag (system reconnect rows do).
+    connected: typeof connected === 'boolean' ? connected : durationSec > 60,
+    madeBy,
     manual: true,
   };
   if (!entry.phoneNumber) {
@@ -143,6 +161,18 @@ export const addCallLog = ({ phoneNumber, type, timestamp, duration } = {}) => {
   logs.unshift(entry);
   setCallLogs(logs);
   return entry;
+};
+
+// Remove a single saved call log by its index in the stored snapshot. Returns
+// true when an entry was removed, false when the index was out of range.
+export const deleteCallLogAt = (index) => {
+  const logs = getCallLogs();
+  if (index < 0 || index >= logs.length) {
+    return false;
+  }
+  logs.splice(index, 1);
+  setCallLogs(logs);
+  return true;
 };
 
 export const getLastAnalyzedAt = () => storage.getNumber(K.LAST_ANALYZED_AT) || 0;
@@ -427,22 +457,45 @@ export const getUnknownGroupCount = () => {
 };
 
 // ---------- Recently reconnected ----------
-// When a user taps "Call" / "Mark as reconnected" we record a timestamp so we
-// can surface a small "Recently Reconnected" section that reinforces the
-// behaviour without feeling gamified.
+// "Reconnecting" with someone is recorded as a connected call-log row rather
+// than a separate store, so there is one source of truth. Tapping "Call" or
+// "Mark reconnected" appends a system-audited, connected row (blank duration)
+// — this is the only reconnect signal on iOS (no call-log import) and for
+// in-app actions the OS never sees. Reads derive the per-contact "last
+// reconnected at" by scanning the call-log store for the newest connected row.
 
-export const getReconnects = () => readJson(K.RECONNECTS, {});
-
+// Append a system-audited connected call for `phone`, stamping the reconnect.
+// Returns true when a row was written. Kept name-compatible with the old
+// reconnects-map API so existing call sites need no change.
 export const recordReconnect = (phone, ts = Date.now()) => {
   const key = normalizeLast10(phone);
   if (!key) { return false; }
-  const map = getReconnects();
-  // Only overwrite if the incoming timestamp is newer, so auto-detected
-  // call-log entries from refresh never clobber a more recent in-app tap.
-  if (map[key] && ts <= map[key]) { return false; }
-  map[key] = ts;
-  writeJson(K.RECONNECTS, map);
-  return true;
+  return Boolean(
+    addCallLog({
+      phoneNumber: phone,
+      type: 'OUTGOING',
+      timestamp: ts,
+      duration: null,
+      connected: true,
+      madeBy: 'system',
+    }),
+  );
+};
+
+// Derives { [normalizedPhone]: latestConnectedTs } from the call-log store,
+// keeping the newest connected row per number. Replaces the old standalone
+// reconnects map; every consumer (engine, milestones) reads the same shape.
+export const getReconnects = () => {
+  const map = {};
+  (getCallLogs() || []).forEach((log) => {
+    if (!isLogConnected(log)) { return; }
+    const key = normalizeLast10(log?.phoneNumber);
+    if (!key) { return; }
+    const ts = getLogTimestamp(log);
+    if (!ts) { return; }
+    if (!map[key] || ts > map[key]) { map[key] = ts; }
+  });
+  return map;
 };
 
 // ---------- Milestones ----------
@@ -834,7 +887,6 @@ const SCOPE_KEYS = {
   callLogs: [K.CALL_LOGS, K.LAST_ANALYZED_AT],
   contacts: [K.CONTACTS, K.DONT_SUGGEST],
   notes: [K.NOTES],
-  reconnects: [K.RECONNECTS],
   goals: [K.GOALS],
   milestones: [K.MILESTONE_DEFS, K.MILESTONES_STATE],
   userProfile: [K.USER_PROFILE],
@@ -906,12 +958,6 @@ const EXPORT_SCOPE_SCHEMA = Object.freeze({
     description: 'Per-contact notes.',
     countField: 'notes',
     fields: [{ name: 'notes', mmkv: K.NOTES, type: 'json' }],
-  },
-  reconnects: {
-    title: 'Reconnect history',
-    description: 'When you last reached out to each person.',
-    countField: 'reconnects',
-    fields: [{ name: 'reconnects', mmkv: K.RECONNECTS, type: 'json' }],
   },
   goals: {
     title: 'Goals',

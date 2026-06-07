@@ -10,7 +10,6 @@ import {
   getContactGroupMap,
   getGroups,
   getDontSuggestMap,
-  recordReconnect,
   setPermsState,
 } from '../storage';
 import { analyzeRelationships } from './relationshipEngine';
@@ -140,40 +139,17 @@ export const refreshAnalysis = async (opts = {}) => {
   const groupsList = getGroups();
   const dontSuggest = getDontSuggestMap();
 
-  // Re-read reconnects on every call so the second pass (after we auto-record
-  // detected reconnects) picks them up. Everything else is stable across the
-  // two passes, so capturing it once avoids duplicating the props bag.
-  const runAnalysis = () =>
-    analyzeRelationships({
-      contacts,
-      callLogs,
-      reconnects: getReconnects(),
-      contactGroups,
-      groups: groupsList,
-      dontSuggest,
-    });
-
-  let analysis = runAnalysis();
-
-  // Auto-record reconnects detected from the call log itself, so a call made
-  // from the system dialer (after a long quiet stretch) lands in the
-  // "Recently reconnected" lane just like an in-app tap would. We rely on
-  // the engine's `recently_reconnected` label, which already encodes the
-  // "long gap + recent contact" heuristic.
-  let mutatedReconnects = false;
-  (analysis.profiles || []).forEach((p) => {
-    if (!p.labels?.includes('recently_reconnected')) { return; }
-    const phone = p.contact?.normalized || p.contact?.phone;
-    const ts = p.summary?.last;
-    if (!phone || !ts) { return; }
-    if (recordReconnect(phone, ts)) {
-      mutatedReconnects = true;
-    }
+  // Reconnects are derived directly from the call-log store now, so a call made
+  // from the system dialer (after a long quiet stretch) already counts as a
+  // connected interaction — no separate auto-record pass is needed.
+  const analysis = analyzeRelationships({
+    contacts,
+    callLogs,
+    reconnects: getReconnects(),
+    contactGroups,
+    groups: groupsList,
+    dontSuggest,
   });
-
-  if (mutatedReconnects) {
-    analysis = runAnalysis();
-  }
 
   setLastAnalyzedAt(analysis.generatedAt);
   return { ...analysis, refreshError: callLogRefreshError };

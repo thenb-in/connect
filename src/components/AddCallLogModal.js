@@ -11,8 +11,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
+import DateTimePickerModal from './DateTimePickerModal';
 import { buildSearchHaystack } from '../utils/contactSearch';
 import { normalizeLast10 } from '../utils/phone';
+import { formatTimestamp } from '../utils/dateUtils';
 
 // The three call types a user can hand-log. Values match what the relationship
 // engine and the Saved-call-logs viewer expect (they look for the OUT/IN/MISS
@@ -29,13 +31,14 @@ const TYPES = [
  * the only way to feed the engine on iOS (which exposes no call history).
  *
  * The user picks a call type, a number (typed, or tapped from their contacts),
- * and an optional duration. The current time is used as the timestamp.
+ * an optional duration, and when the call happened (defaults to now, via the
+ * built-in date/time picker).
  *
  * Props:
  *   visible   — show/hide the sheet.
  *   contacts  — contacts to search when picking a number.
  *   onClose   — () => void, dismiss without saving.
- *   onAdd     — ({ phoneNumber, type, duration }) => void, save the entry.
+ *   onAdd     — ({ phoneNumber, type, duration, timestamp }) => void, save it.
  */
 const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
   const insets = useSafeAreaInsets();
@@ -43,6 +46,8 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
   const [number, setNumber] = useState('');
   const [durationMin, setDurationMin] = useState('');
   const [query, setQuery] = useState('');
+  const [timestamp, setTimestamp] = useState(() => Date.now());
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Reset every field each time the sheet opens so a reopened form never
   // inherits stale input from a previous entry.
@@ -53,6 +58,8 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
     setNumber('');
     setDurationMin('');
     setQuery('');
+    setTimestamp(Date.now());
+    setPickerOpen(false);
   } else if (!visible && wasVisible) {
     setWasVisible(false);
   }
@@ -84,8 +91,9 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
       type,
       // A missed call never connected, so its duration is always zero.
       duration: isMissed ? 0 : (parseInt(durationMin, 10) || 0) * 60,
+      timestamp,
     });
-  }, [canSave, onAdd, number, type, isMissed, durationMin]);
+  }, [canSave, onAdd, number, type, isMissed, durationMin, timestamp]);
 
   const renderItem = useCallback(
     ({ item }) => {
@@ -195,6 +203,18 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
                 </>
               ) : null}
 
+              <Text style={styles.sectionLabel}>Date &amp; time</Text>
+              <TouchableOpacity
+                style={styles.numberWrap}
+                onPress={() => setPickerOpen(true)}
+              >
+                <Icon name="calendar-clock" size={18} color={theme.colors.textSubtle} />
+                <Text style={[styles.numberInput, styles.dateText]}>
+                  {formatTimestamp(timestamp)}
+                </Text>
+                <Icon name="chevron-down" size={18} color={theme.colors.textSubtle} />
+              </TouchableOpacity>
+
               <View style={styles.searchWrap}>
                 <Icon name="magnify" size={18} color={theme.colors.textSubtle} />
                 <TextInput
@@ -241,6 +261,17 @@ const AddCallLogModal = ({ visible, contacts = [], onClose, onAdd }) => {
             <Text style={styles.btnPrimaryText}>Add call log</Text>
           </TouchableOpacity>
         </View>
+
+        <DateTimePickerModal
+          visible={pickerOpen}
+          value={timestamp}
+          maximumDate={Date.now()}
+          onCancel={() => setPickerOpen(false)}
+          onConfirm={(ms) => {
+            setTimestamp(ms);
+            setPickerOpen(false);
+          }}
+        />
       </View>
     </Modal>
   );
@@ -328,6 +359,9 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: theme.font.body,
     paddingVertical: 0,
+  },
+  dateText: {
+    paddingVertical: 2,
   },
   row: {
     flexDirection: 'row',

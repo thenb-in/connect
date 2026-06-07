@@ -50,7 +50,7 @@ const HomeScreen = ({ navigation }) => {
   const { analysis, refreshing, refresh, syncOnFocus } = useConnectAnalysis();
   // Recompute milestone progress whenever the analysis regenerates, since
   // reconnects are recorded as a side effect of a refresh/focus sync.
-  const { milestones, stats } = useMilestones(analysis?.generatedAt);
+  const { milestones } = useMilestones(analysis?.generatedAt);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   // iOS-only "show hidden cards" setting (toggled in Settings). Re-read on focus
@@ -281,27 +281,6 @@ const HomeScreen = ({ navigation }) => {
           <UpNextRow items={queue} onPress={onCardPress} onCall={onCall} />
         ) : null}
 
-        {/* Scoreboard — the at-a-glance momentum strip. Bolder than a soft KPI
-            row: this is a B2C nudge, not a CRM dashboard. */}
-        <View style={styles.statsRow}>
-          <Stat
-            label="Day streak"
-            value={stats?.currentStreakDays ?? 0}
-            icon="fire"
-            flame
-          />
-          <Stat
-            label="Dormant"
-            value={analysis?.counts?.lostConnections ?? 0}
-            highlight
-          />
-          <Stat
-            label="Reconnected"
-            caption="(7d)"
-            value={analysis?.counts?.recentlyReconnected ?? 0}
-          />
-        </View>
-
         {milestones.length > 0 ? (
           <>
             <SectionHeader
@@ -382,40 +361,6 @@ const HomeScreen = ({ navigation }) => {
   );
 };
 
-const Stat = ({ label, value, caption, highlight, flame, icon }) => (
-  <View
-    style={[
-      styles.statCard,
-      highlight && styles.statCardHighlight,
-      flame && value > 0 && styles.statCardFlame,
-    ]}
-  >
-    <View style={styles.statValueRow}>
-      {icon && value > 0 ? (
-        <Icon
-          name={icon}
-          size={20}
-          color={flame ? theme.colors.accent : theme.colors.text}
-          style={styles.statIcon}
-        />
-      ) : null}
-      <Text
-        style={[
-          styles.statValue,
-          highlight && styles.statValueHighlight,
-          flame && value > 0 && styles.statValueFlame,
-        ]}
-      >
-        {value}
-      </Text>
-    </View>
-    <Text style={styles.statLabel}>
-      {label}
-      {caption ? <Text style={styles.statCaption}> {caption}</Text> : null}
-    </Text>
-  </View>
-);
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   lastSynced: {
@@ -431,53 +376,6 @@ const styles = StyleSheet.create({
     paddingRight: theme.spacing.lg,
     paddingTop: theme.spacing.md,
   },
-  statsRow: {
-    flexDirection: 'row',
-    paddingHorizontal: theme.spacing.lg,
-    paddingTop: theme.spacing.lg,
-    gap: theme.spacing.sm,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.md,
-    paddingVertical: theme.spacing.md,
-    paddingHorizontal: theme.spacing.sm,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    alignItems: 'center',
-  },
-  statCardHighlight: {
-    backgroundColor: theme.colors.surfaceAlt,
-    borderColor: theme.colors.accent,
-  },
-  statCardFlame: {
-    backgroundColor: '#FDEEE7',
-    borderColor: theme.colors.accent,
-  },
-  statValueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statIcon: { marginRight: 4 },
-  statValue: {
-    fontSize: theme.font.h1,
-    fontWeight: '800',
-    color: theme.colors.text,
-  },
-  statValueHighlight: {
-    color: theme.colors.accent,
-  },
-  statValueFlame: {
-    color: theme.colors.accent,
-  },
-  statLabel: {
-    fontSize: theme.font.small,
-    fontWeight: '600',
-    color: theme.colors.textMuted,
-    marginTop: 2,
-  },
-  statCaption: { color: theme.colors.textSubtle },
   headerRightWrap: {
     flexDirection: 'row',
     alignItems: 'center',
