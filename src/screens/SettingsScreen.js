@@ -60,11 +60,6 @@ const DELETE_SCOPES = [
     description: 'Custom groups and which contacts belong to which.',
   },
   {
-    id: 'callLogs',
-    title: 'Call log snapshot',
-    description: 'Cached call history used by the relationship engine.',
-  },
-  {
     id: 'contacts',
     title: 'Contacts cache',
     description: 'Local copy of your address book that Connect reads from.',
@@ -85,6 +80,11 @@ const DELETE_SCOPES = [
     description: 'Earned achievements like reconnect counts and day streaks.',
   },
   {
+    id: 'callLogs',
+    title: 'Call log snapshot',
+    description: 'Cached call history used by the relationship engine.',
+  },
+  {
     id: 'userProfile',
     title: 'Your context',
     description:
@@ -99,7 +99,7 @@ const DELETE_SCOPES = [
 
 // Scopes that start unchecked in the delete form — generally safer to keep
 // these unless the user explicitly wants them gone.
-const DEFAULT_UNCHECKED_SCOPES = new Set(['llmKey', 'userProfile']);
+const DEFAULT_UNCHECKED_SCOPES = new Set(['llmKey', 'userProfile', 'callLogs']);
 const defaultSelectedScopes = () =>
   new Set(
     DELETE_SCOPES.filter((s) => !DEFAULT_UNCHECKED_SCOPES.has(s.id)).map(
