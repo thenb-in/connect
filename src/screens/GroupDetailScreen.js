@@ -1,6 +1,8 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, StyleSheet, FlatList } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import AppHeader from '../components/AppHeader';
 import ContactSearchBar from '../components/ContactSearchBar';
@@ -8,8 +10,14 @@ import ReconnectCard from '../components/ReconnectCard';
 import EmptyState from '../components/EmptyState';
 import ConnectSetupGate from '../components/ConnectSetupGate';
 import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
-import { getDisplayGroups, UNKNOWN_GROUP_ID } from '../storage';
+import {
+  getDisplayGroups,
+  removeContactsFromGroup,
+  UNKNOWN_GROUP_ID,
+} from '../storage';
 import { initiateTrackedCall } from '../utils/makeImmediateCall';
+
+const keyForProfile = (p) => p.contact.normalized || p.contact.key;
 
 /**
  * Shows every contact tagged with a single group, ordered by reconnect
@@ -17,8 +25,11 @@ import { initiateTrackedCall } from '../utils/makeImmediateCall';
  */
 const GroupDetailScreen = ({ navigation, route }) => {
   const groupId = route?.params?.groupId;
+  const insets = useSafeAreaInsets();
   const { analysis, reanalyzeFromCache } = useConnectAnalysis();
   const [results, setResults] = useState([]);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
 
   // Re-read group membership from storage whenever this screen regains focus.
   // Tagging a contact into a group happens on the contact detail screen, which
@@ -34,6 +45,10 @@ const GroupDetailScreen = ({ navigation, route }) => {
     () => getDisplayGroups().find((g) => g.id === groupId) || null,
     [groupId],
   );
+
+  // The synthetic "Unknown" group holds contacts in no real group, so there's
+  // nothing to remove them from — selection is only meaningful for real groups.
+  const canSelect = groupId && groupId !== UNKNOWN_GROUP_ID;
 
   const profiles = useMemo(() => {
     const all = analysis?.profiles || [];
@@ -59,23 +74,65 @@ const GroupDetailScreen = ({ navigation, route }) => {
     initiateTrackedCall(phone).catch(() => {});
   }, []);
 
-  return (
-    <View style={styles.container}>
-      <AppHeader
-        title={group?.name || 'Group'}
-        subtitle={
-          profiles.length
-            ? `${profiles.length} contact${profiles.length === 1 ? '' : 's'} • sorted by who to reach out to first`
-            : 'Empty group'
-        }
-        onBack={() => navigation.goBack()}
-      />
-      <ConnectSetupGate>
-      <ContactSearchBar data={profiles} onResults={setResults} />
-      <FlatList
-        data={results}
-        keyExtractor={(p) => p.contact.normalized || p.contact.key}
-        renderItem={({ item }) => (
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelected(new Set());
+  }, []);
+
+  const toggle = useCallback((key) => {
+    if (!key) return;
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  // "Select all" works on the currently filtered (visible) list, so a search
+  // can narrow the set before grabbing the whole result.
+  const visibleKeys = useMemo(() => results.map(keyForProfile), [results]);
+  const allVisibleSelected =
+    visibleKeys.length > 0 && visibleKeys.every((k) => selected.has(k));
+
+  const onToggleSelectAll = useCallback(() => {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (allVisibleSelected) visibleKeys.forEach((k) => next.delete(k));
+      else visibleKeys.forEach((k) => next.add(k));
+      return next;
+    });
+  }, [visibleKeys, allVisibleSelected]);
+
+  const onRemoveSelected = useCallback(() => {
+    const phones = profiles
+      .filter((p) => selected.has(keyForProfile(p)))
+      .map((p) => p.contact.normalized || p.contact.phone)
+      .filter(Boolean);
+    if (!phones.length) return;
+    const n = phones.length;
+    Alert.alert(
+      `Remove ${n} contact${n === 1 ? '' : 's'}?`,
+      `This removes ${n === 1 ? 'them' : 'them'} from "${group?.name || 'this group'}". Their other groups and history stay untouched.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => {
+            removeContactsFromGroup(phones, groupId);
+            exitSelectMode();
+            reanalyzeFromCache();
+          },
+        },
+      ],
+    );
+  }, [profiles, selected, group, groupId, exitSelectMode, reanalyzeFromCache]);
+
+  const renderItem = useCallback(
+    ({ item }) => {
+      if (!selectMode) {
+        return (
           <ReconnectCard
             profile={item}
             onPress={() =>
@@ -85,7 +142,62 @@ const GroupDetailScreen = ({ navigation, route }) => {
             }
             onCall={() => onCall(item)}
           />
-        )}
+        );
+      }
+      const key = keyForProfile(item);
+      const checked = selected.has(key);
+      return (
+        <View style={styles.selectRow}>
+          <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+            {checked ? (
+              <Icon name="check" size={14} color={theme.colors.surface} />
+            ) : null}
+          </View>
+          <View style={{ flex: 1 }}>
+            <ReconnectCard profile={item} onPress={() => toggle(key)} />
+          </View>
+        </View>
+      );
+    },
+    [selectMode, selected, navigation, onCall, toggle],
+  );
+
+  const subtitle = selectMode
+    ? `${selected.size} selected`
+    : profiles.length
+    ? `${profiles.length} contact${profiles.length === 1 ? '' : 's'} • sorted by who to reach out to first`
+    : 'Empty group';
+
+  return (
+    <View style={styles.container}>
+      <AppHeader
+        title={group?.name || 'Group'}
+        subtitle={subtitle}
+        onBack={selectMode ? undefined : () => navigation.goBack()}
+        rightLabel={
+          selectMode
+            ? 'Done'
+            : canSelect && profiles.length
+            ? 'Select'
+            : undefined
+        }
+        onRightPress={selectMode ? exitSelectMode : () => setSelectMode(true)}
+      />
+      <ConnectSetupGate>
+      <ContactSearchBar data={profiles} onResults={setResults} />
+      {selectMode && results.length ? (
+        <View style={styles.selectBar}>
+          <TouchableOpacity onPress={onToggleSelectAll} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={styles.selectBarBtn}>
+              {allVisibleSelected ? 'Unselect all' : 'Select all'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      <FlatList
+        data={results}
+        keyExtractor={keyForProfile}
+        renderItem={renderItem}
         ListEmptyComponent={
           <EmptyState
             icon="account-plus-outline"
@@ -95,16 +207,90 @@ const GroupDetailScreen = ({ navigation, route }) => {
         }
         contentContainerStyle={{
           paddingTop: theme.spacing.md,
-          paddingBottom: theme.spacing.xxl,
+          paddingBottom: selectMode ? 120 : theme.spacing.xxl,
         }}
       />
       </ConnectSetupGate>
+
+      {selectMode ? (
+        <View style={[styles.footer, { paddingBottom: insets.bottom + theme.spacing.lg }]}>
+          <TouchableOpacity
+            style={[styles.removeBtn, selected.size === 0 && styles.btnDisabled]}
+            disabled={selected.size === 0}
+            onPress={onRemoveSelected}
+            activeOpacity={0.85}
+          >
+            <Icon name="account-remove-outline" size={18} color={theme.colors.surface} />
+            <Text style={styles.removeBtnText}>
+              {selected.size > 0
+                ? `Remove from group (${selected.size})`
+                : 'Remove from group'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
+  selectBar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: theme.spacing.lg,
+    paddingBottom: theme.spacing.xs,
+  },
+  selectBarBtn: {
+    color: theme.colors.primary,
+    fontWeight: '700',
+    fontSize: theme.font.small,
+  },
+  selectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: theme.colors.border,
+    marginLeft: theme.spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surface,
+  },
+  checkboxChecked: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  footer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.md,
+    backgroundColor: theme.colors.background,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.divider,
+  },
+  removeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: theme.spacing.md,
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.accent,
+  },
+  removeBtnText: {
+    color: theme.colors.surface,
+    fontWeight: '700',
+    fontSize: theme.font.body,
+    marginLeft: theme.spacing.sm,
+  },
+  btnDisabled: { opacity: 0.5 },
 });
 
 export default GroupDetailScreen;

@@ -482,6 +482,35 @@ export const addContactsToGroup = (phones, groupId) => {
   return added;
 };
 
+/**
+ * Remove the given groupId from many contacts at once — the inverse of
+ * addContactsToGroup. Used by the group detail screen's multi-select to pull a
+ * batch of members out of one group without touching their other memberships.
+ * Returns the count of contacts actually removed (skipping ones not in the
+ * group). A contact left in no groups is dropped from the map entirely.
+ */
+export const removeContactsFromGroup = (phones, groupId) => {
+  if (!groupId || !Array.isArray(phones) || !phones.length) return 0;
+  const map = getContactGroupMap();
+  let removed = 0;
+  const touchedKeys = [];
+  phones.forEach((phone) => {
+    const key = normalizeLast10(phone);
+    if (!key) return;
+    const cur = map[key];
+    if (!cur || !cur.includes(groupId)) return;
+    touchedKeys.push(key);
+    const next = cur.filter((gid) => gid !== groupId);
+    if (next.length) map[key] = next;
+    else delete map[key];
+    removed += 1;
+  });
+  if (removed > 0) writeJson(K.CONTACT_GROUPS, map);
+  // A user hand-picking members to remove is an explicit signal, so lock them.
+  if (touchedKeys.length) markContactsManual(touchedKeys);
+  return removed;
+};
+
 export const toggleContactInGroup = (phone, groupId) => {
   const key = normalizeLast10(phone);
   if (!key) return [];
