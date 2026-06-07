@@ -17,7 +17,8 @@ import theme from '../theme';
 import AppHeader from '../components/AppHeader';
 import { initiateTrackedCall } from '../utils/makeImmediateCall';
 import ReconnectCard from '../components/ReconnectCard';
-import { SpotlightCard, UpNextRow } from '../components/SpotlightHero';
+import { SpotlightCard } from '../components/SpotlightHero';
+import SlotMachine from '../components/SlotMachine';
 import SectionHeader from '../components/SectionHeader';
 import EmptyState from '../components/EmptyState';
 import MilestonesCard from '../components/MilestonesCard';
@@ -309,14 +310,11 @@ const HomeScreen = ({ navigation }) => {
 
   // Re-centre the carousel on the focus card only when the *set* of lanes
   // changes (signature), not on every focus-sync — so a manual swipe isn't
-  // yanked back when the engine re-syncs. `focusedIdx` drives the "Up next" row
-  // below to follow whichever card is centred.
+  // yanked back when the engine re-syncs.
   const signature = cards.map((c) => c.key).join(',');
   const carouselRef = useRef(null);
-  const [focusedIdx, setFocusedIdx] = useState(0);
   useEffect(() => {
     if (!cards.length) return undefined;
-    setFocusedIdx(focusIndex);
     const x = focusIndex * (CARD_W + CARD_GAP);
     const raf = requestAnimationFrame(() => {
       carouselRef.current?.scrollTo({ x, animated: false });
@@ -324,11 +322,6 @@ const HomeScreen = ({ navigation }) => {
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature, CARD_W]);
-
-  const queue = useMemo(
-    () => (cards[focusedIdx]?.list || []).slice(1, 8),
-    [cards, focusedIdx],
-  );
 
   const onCardPress = useCallback(
     (profile) => {
@@ -379,10 +372,20 @@ const HomeScreen = ({ navigation }) => {
           const ts = getLastAnalyzedAt();
           return ts ? (
             <Text style={styles.lastSynced}>
-              Last synced {formatTimestamp(ts)}
+              Contacts refreshed - {formatTimestamp(ts)}
             </Text>
           ) : null;
         })()}
+
+        {/* Slot machine: a playful "who should I call?" roller that sits above
+            the lanes. Spins up to five people, one per random circle, and
+            shares the cards' dismissal counter (re-spin = soft dismiss). */}
+        <SlotMachine
+          profiles={analysis?.profiles || []}
+          totalContacts={analysis?.counts?.total || 0}
+          onCall={onCall}
+          onOpenContact={onCardPress}
+        />
 
         {/* The magnetic centrepiece: a swipeable carousel with one spotlight
             card per lane — Missed connections, Reconnect today, Want to connect,
@@ -390,7 +393,6 @@ const HomeScreen = ({ navigation }) => {
             ~10% to hint the swipe; the "up next" queue below follows whichever
             card is centred. */}
         {cards.length ? (
-          <>
             <ScrollView
               ref={carouselRef}
               horizontal
@@ -399,12 +401,6 @@ const HomeScreen = ({ navigation }) => {
               snapToInterval={CARD_W + CARD_GAP}
               snapToAlignment="start"
               contentOffset={{ x: focusIndex * (CARD_W + CARD_GAP), y: 0 }}
-              onMomentumScrollEnd={(e) => {
-                const idx = Math.round(
-                  e.nativeEvent.contentOffset.x / (CARD_W + CARD_GAP),
-                );
-                setFocusedIdx(Math.max(0, Math.min(idx, cards.length - 1)));
-              }}
               contentContainerStyle={styles.carousel}
             >
               {cards.map((card, idx) => (
@@ -438,8 +434,6 @@ const HomeScreen = ({ navigation }) => {
                 </View>
               ))}
             </ScrollView>
-            <UpNextRow items={queue} onPress={onCardPress} onCall={onCall} />
-          </>
         ) : (
           <EmptyState
             icon="account-heart-outline"

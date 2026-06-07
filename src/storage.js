@@ -82,6 +82,13 @@ const K = {
   CACHED_PROPOSAL: 'connect.cachedCategorization',
   GEMINI_MODEL: 'connect.geminiModel',
   DONT_SUGGEST: 'connect.dontSuggest',
+  // Per-person "swipe up to dismiss" counter for the home spotlight deck.
+  // Stored as `{ [normalizedPhone]: timesDismissed }`. A dismissed person is
+  // held back from the deck while anyone un-dismissed remains; once everyone is
+  // dismissed they resurface (least-dismissed first). Past CARD_DISMISS_LIMIT
+  // dismissals a person is dropped from the deck entirely. Persisted so the
+  // suppression escalates across sessions rather than resetting each launch.
+  CARD_DISMISSALS: 'connect.cardDismissals',
   // Lightweight "about you" facts the user shares during onboarding (schools,
   // colleges, workplaces, places lived, free-text notes on how they save
   // contacts). All optional. Threaded into the LLM categorisation prompt so
@@ -844,6 +851,33 @@ export const toggleDontSuggest = (phone) => {
   return next;
 };
 
+// ---------- Card dismissals (home spotlight deck) ----------
+// Counts how many times each person has been swiped up off the spotlight deck.
+// Distinct from DONT_SUGGEST (a hard, explicit opt-out): a dismissal is a soft
+// "not now" that escalates — see CARD_DISMISSALS above for how the home deck
+// reads it. Past this many dismissals a person is never shown in the deck again.
+export const CARD_DISMISS_LIMIT = 4000;  // want to turn this feature off, but not remove it hence marked a large number.
+
+export const getCardDismissalMap = () => readJson(K.CARD_DISMISSALS, {});
+
+export const getCardDismissalCount = (phone) => {
+  const key = normalizeLast10(phone);
+  if (!key) return 0;
+  return getCardDismissalMap()[key] || 0;
+};
+
+// Bumps a person's dismissal count by one and persists it. Returns the new
+// count (0 when the phone can't be normalised).
+export const incrementCardDismissal = (phone) => {
+  const key = normalizeLast10(phone);
+  if (!key) return 0;
+  const map = getCardDismissalMap();
+  const next = (map[key] || 0) + 1;
+  map[key] = next;
+  writeJson(K.CARD_DISMISSALS, map);
+  return next;
+};
+
 // ---------- Notes ----------
 
 export const getAllNotes = () => readJson(K.NOTES, {});
@@ -1162,7 +1196,7 @@ const SCOPE_KEYS = {
   llmKey: [K.LLM_PROVIDER, K.LLM_KEY, K.LLM_KEYS, K.LLM_ACTIVE, K.GEMINI_MODEL],
   groups: [K.GROUPS, K.CONTACT_GROUPS, K.MANUAL_CONTACTS, K.LAST_CATEGORIZED_AT, K.CACHED_PROPOSAL],
   callLogs: [K.CALL_LOGS, K.LAST_ANALYZED_AT, K.CALL_LOG_BASELINE_AT],
-  contacts: [K.CONTACTS, K.DONT_SUGGEST],
+  contacts: [K.CONTACTS, K.DONT_SUGGEST, K.CARD_DISMISSALS],
   notes: [K.NOTES],
   goals: [K.GOALS],
   milestones: [K.MILESTONE_DEFS, K.MILESTONES_STATE, K.MILESTONE_SINCE],
