@@ -10,6 +10,7 @@ import {
   Alert,
   ActivityIndicator,
   Switch,
+  Platform,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
@@ -19,6 +20,8 @@ import {
   clearConnectStorageSelective,
   getAdvancedMode,
   setAdvancedMode,
+  getShowHiddenCards,
+  setShowHiddenCards,
   getGroups,
   getLlmConfig,
   getLlmKeys,
@@ -131,9 +134,24 @@ const SettingsScreen = ({ navigation }) => {
   // Advanced mode opt-in (persisted). Gates the AI-categorisation section
   // below — those features are the advanced ones.
   const [advancedMode, setAdvancedModeState] = useState(() => getAdvancedMode());
+  // iOS-only "show hidden cards" opt-in (persisted). Reveals the home lanes
+  // that iOS hides when they have no data.
+  const [showHiddenCards, setShowHiddenCardsState] = useState(() =>
+    getShowHiddenCards(),
+  );
+  const onToggleShowHiddenCards = useCallback((value) => {
+    setShowHiddenCards(value);
+    setShowHiddenCardsState(value);
+  }, []);
   const onToggleAdvancedMode = useCallback((value) => {
     setAdvancedMode(value);
     setAdvancedModeState(value);
+    // Keep the dependent iOS toggle from lingering "on" once advanced mode is
+    // off (its control is hidden in simple mode).
+    if (!value) {
+      setShowHiddenCards(false);
+      setShowHiddenCardsState(false);
+    }
   }, []);
   const llm = useMemo(() => getLlmConfig(), [llmBump]);
   const llmKeysSnapshot = useMemo(() => getLlmKeys(), [llmBump]);
@@ -492,6 +510,37 @@ const SettingsScreen = ({ navigation }) => {
 
         {advancedMode ? (
         <>
+        {Platform.OS === 'ios' ? (
+          <>
+            <Text style={styles.sectionLabel}>Home screen</Text>
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.row}
+                onPress={() => onToggleShowHiddenCards(!showHiddenCards)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+                  <Icon name="eye-outline" size={20} color={theme.colors.primary} />
+                </View>
+                <View style={styles.rowBody}>
+                  <Text style={styles.rowTitle}>Show hidden cards</Text>
+                  <Text style={styles.rowSubtitle}>
+                    iOS hides the call-history cards (like Missed connections)
+                    when they have no data. Turn this on to always show them.
+                  </Text>
+                </View>
+                <View pointerEvents="none" style={styles.switchWrap}>
+                  <Switch
+                    value={showHiddenCards}
+                    onValueChange={onToggleShowHiddenCards}
+                    trackColor={{ true: theme.colors.primary }}
+                  />
+                </View>
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : null}
+
         <Text style={styles.sectionLabel}>
           AI categorisation
         </Text>

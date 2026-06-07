@@ -9,6 +9,7 @@ import {
   ToastAndroid,
   TouchableOpacity,
   Modal,
+  useWindowDimensions,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -16,14 +17,20 @@ import theme from '../theme';
 import AppHeader from '../components/AppHeader';
 import { makeImmediateCall } from '../utils/makeImmediateCall';
 import ReconnectCard from '../components/ReconnectCard';
-import SpotlightHero from '../components/SpotlightHero';
+import { SpotlightCard, UpNextRow } from '../components/SpotlightHero';
 import SectionHeader from '../components/SectionHeader';
 import EmptyState from '../components/EmptyState';
 import MilestonesCard from '../components/MilestonesCard';
 import ConnectSetupGate from '../components/ConnectSetupGate';
 import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
 import { useMilestones } from '../hooks/useMilestones';
-import { getLastAnalyzedAt, recordReconnect, CATEGORIES } from '../storage';
+import {
+  getLastAnalyzedAt,
+  recordReconnect,
+  CATEGORIES,
+  WANT_TO_CONNECT_GROUP_ID,
+  getShowHiddenCards,
+} from '../storage';
 import { formatTimestamp } from '../utils/dateUtils';
 import { shareApp } from '../utils/appShare';
 import AboutModal from '../components/AboutModal';
@@ -46,6 +53,15 @@ const HomeScreen = ({ navigation }) => {
   const { milestones, stats } = useMilestones(analysis?.generatedAt);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  // iOS-only "show hidden cards" setting (toggled in Settings). Re-read on focus
+  // so toggling it there reflects when the user returns to Home.
+  const [showHidden, setShowHidden] = useState(() => getShowHiddenCards());
+
+  // Carousel page sizing: each spotlight card is ~86% of the screen so the next
+  // card peeks ~10% on the right edge, hinting that it's swipeable.
+  const { width: screenWidth } = useWindowDimensions();
+  const CARD_W = Math.round(screenWidth * 0.86);
+  const CARD_GAP = theme.spacing.md;
 
   // Whenever the home tab regains focus, pull the call-log delta since the
   // last sync (no contacts re-import, no spinner). This is what gives the
@@ -54,6 +70,7 @@ const HomeScreen = ({ navigation }) => {
   useFocusEffect(
     useCallback(() => {
       syncOnFocus();
+      setShowHidden(getShowHiddenCards());
     }, [syncOnFocus]),
   );
 
@@ -71,19 +88,8 @@ const HomeScreen = ({ navigation }) => {
     ToastAndroid.show('Synced', ToastAndroid.SHORT);
   }, [refresh]);
 
-  // When the user has no call logs (iOS / Android with logs denied / no logs
-  // imported yet) the engine has nothing to score against, so the Reconnect
-  // Today / Lost lanes will be empty. In that mode we surface one random
-  // person from each contact group instead, so the dashboard still feels
-  // populated and the user has somewhere to start.
-  const hasCallLogSignal = useMemo(
-    () =>
-      (analysis?.profiles || []).some((p) => p.summary?.total > 0),
-    [analysis],
-  );
-
   const randomPerGroup = useMemo(() => {
-    if (!analysis?.profiles?.length || hasCallLogSignal) return [];
+    if (!analysis?.profiles?.length) return [];
     const byGroup = new Map();
     analysis.profiles.forEach((p) => {
       // "Say hi to someone today" is a reminder lane in spirit, so the same
@@ -113,20 +119,50 @@ const HomeScreen = ({ navigation }) => {
         : CATEGORIES.length;
     out.sort((a, b) => rank(a) - rank(b));
     return out.slice(0, 10);
-  }, [analysis, hasCallLogSignal]);
+  }, [analysis]);
 
-  // The magnetic top-of-screen highlights. When we have call-log signal these
-  // are the engine's "reconnect today" picks; otherwise we fall back to one
-  // person per group so the spotlight is never empty for a brand-new user.
-  const highlights = useMemo(
-    () =>
-      hasCallLogSignal
-        ? analysis?.reconnectToday || []
-        : randomPerGroup.map((r) => r.profile),
-    [hasCallLogSignal, analysis, randomPerGroup],
-  );
+  // The people the user hand-picked to stay close to ("Want to connect" group),
+  // most overdue first. This is what feeds the spotlight when there's nothing
+  // pressing in "reconnect today" — so the energetic card is never empty.
+  const wantToConnect = useMemo(() => {
+    const list = (analysis?.profiles || []).filter(
+      (p) =>
+        !p.remindersSuppressed &&
+        (p.groups || []).some((g) => g.id === WANT_TO_CONNECT_GROUP_ID),
+    );
+    const overdue = (p) => {
+      const d = p.summary?.daysSinceLast;
+      return d === null || d === undefined ? Infinity : d;
+    };
+    return [...list].sort((a, b) => overdue(b) - overdue(a)).slice(0, 10);
+  }, [analysis]);
+
+  // The magnetic top-of-screen highlights, in priority order so the spotlight
+  // always has someone to feature:
+  //   1. "reconnect today" — people the engine flags as overdue
+  //   2. "want to connect" — the people you hand-picked to keep close
+  //   3. one person per group — last resort for brand-new users
+  const { highlights, highlightsSource } = useMemo(() => {
+    const reconnect = analysis?.reconnectToday || [];
+    if (reconnect.length) return { highlights: reconnect, highlightsSource: 'reconnect' };
+    if (wantToConnect.length) return { highlights: wantToConnect, highlightsSource: 'wantToConnect' };
+    return { highlights: randomPerGroup.map((r) => r.profile), highlightsSource: 'random' };
+  }, [analysis, wantToConnect, randomPerGroup]);
   const hero = highlights[0] || null;
   const queue = useMemo(() => highlights.slice(1, 8), [highlights]);
+
+  // "Missed connections" is now the second card in the spotlight carousel. iOS
+  // hides it when empty (no call history to derive it) unless "show hidden
+  // cards" is on; Android always includes it.
+  const missedConnections = analysis?.missedCallsToReturn || [];
+  const includeMissed =
+    missedConnections.length > 0 || Platform.OS === 'android' || showHidden;
+  const reachSubline =
+    highlightsSource === 'reconnect'
+      ? "You've gone quiet — a good time to reconnect"
+      : highlightsSource === 'wantToConnect'
+      ? 'People you chose to keep close'
+      : 'A few people from your circles';
 
   const onCardPress = useCallback(
     (profile) => {
@@ -181,39 +217,69 @@ const HomeScreen = ({ navigation }) => {
           ) : null;
         })()}
 
-        {/* The magnetic centrepiece: one person to call right now, plus an
-            "up next" queue. Falls back to one person per group when there's no
-            call-log signal yet (see `highlights`). */}
-        <SectionHeader
-          title={hasCallLogSignal ? 'Reconnect today' : 'Say hi today'}
-          caption={
-            hasCallLogSignal
-              ? 'The relationship worth a call right now'
-              : 'No call history yet — someone from each of your circles'
-          }
-          actionLabel={highlights.length > 8 ? 'See all' : null}
-          onActionPress={() => navigation.navigate('ConnectReconnect')}
-        />
-        {hero ? (
-          <SpotlightHero
-            hero={hero}
-            queue={queue}
-            onPress={onCardPress}
-            onCall={onCall}
-          />
+        {/* The magnetic centrepiece: a swipeable carousel of spotlight cards —
+            "Reach out today" first, "Missed connections" beside it. The next
+            card peeks ~10% to hint the swipe; the "up next" queue sits below. */}
+        {hero || includeMissed ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            decelerationRate="fast"
+            snapToInterval={CARD_W + CARD_GAP}
+            snapToAlignment="start"
+            contentContainerStyle={styles.carousel}
+          >
+            {hero ? (
+              <View
+                style={{ width: CARD_W, marginRight: includeMissed ? CARD_GAP : 0 }}
+              >
+                <SpotlightCard
+                  profile={hero}
+                  width={CARD_W}
+                  variant="primary"
+                  kicker="REACH OUT TODAY"
+                  kickerIcon="lightning-bolt"
+                  subline={reachSubline}
+                  footerLabel={highlights.length > 1 ? 'See all' : null}
+                  onFooterPress={() => navigation.navigate('ConnectReconnect')}
+                  onPress={onCardPress}
+                  onCall={onCall}
+                />
+              </View>
+            ) : null}
+            {includeMissed ? (
+              <View style={{ width: CARD_W }}>
+                <SpotlightCard
+                  profile={missedConnections[0] || null}
+                  width={CARD_W}
+                  variant="accent"
+                  kicker="MISSED CONNECTIONS"
+                  kickerIcon="phone-missed"
+                  subline="They called — you haven't called back"
+                  footerLabel={
+                    missedConnections.length > 1
+                      ? `+${missedConnections.length - 1} more`
+                      : null
+                  }
+                  onFooterPress={() => navigation.navigate('ConnectMissed')}
+                  emptyTitle="No missed connections"
+                  emptyBody="You've returned everyone's calls."
+                  onPress={onCardPress}
+                  onCall={onCall}
+                />
+              </View>
+            ) : null}
+          </ScrollView>
         ) : (
           <EmptyState
-            icon="weather-sunny"
-            title={hasCallLogSignal ? 'All caught up' : 'Waiting for call history'}
-            body={
-              hasCallLogSignal
-                ? 'Nothing pressing right now — enjoy the quiet.'
-                : Platform.OS === 'android'
-                ? 'Once we have your call log we can spot dormant friendships.'
-                : "iOS doesn't expose call history — add contacts to see suggestions."
-            }
+            icon="account-heart-outline"
+            title="Add people to stay close to"
+            body="Pick a few people for your “Want to connect” group and they’ll show up here."
           />
         )}
+        {hero ? (
+          <UpNextRow items={queue} onPress={onCardPress} onCall={onCall} />
+        ) : null}
 
         {/* Scoreboard — the at-a-glance momentum strip. Bolder than a soft KPI
             row: this is a B2C nudge, not a CRM dashboard. */}
@@ -246,41 +312,6 @@ const HomeScreen = ({ navigation }) => {
           </>
         ) : null}
 
-        {/* Missed connections: people who called and we never called back. Same
-            iOS/Android visibility rule as lost connections — iOS has no call
-            history to derive these from, so hide the lane entirely when empty;
-            Android keeps the soft empty state. */}
-        {Platform.OS !== 'android' && (analysis?.missedCallsToReturn || []).length === 0 ? null : (
-          <>
-            <SectionHeader
-              title="Missed connections"
-              caption="They called — you have not called back yet"
-              actionLabel={
-                (analysis?.missedCallsToReturn || []).length > 5 ? 'See all' : null
-              }
-              onActionPress={() => navigation.navigate('ConnectMissed')}
-            />
-            {(analysis?.missedCallsToReturn || []).length === 0 ? (
-              <EmptyState
-                icon="phone-missed-outline"
-                title="No missed connections"
-                body="You have returned everyone's calls."
-                compact
-              />
-            ) : (
-              (analysis?.missedCallsToReturn || []).slice(0, 4).map((p) => (
-                <ReconnectCard
-                  key={p.contact.normalized}
-                  profile={p}
-                  compact
-                  onPress={() => onCardPress(p)}
-                  onCall={() => onCall(p)}
-                />
-              ))
-            )}
-          </>
-        )}
-
         {(analysis?.recentlyReconnected || []).length > 0 ? (
           <>
             <SectionHeader
@@ -293,24 +324,6 @@ const HomeScreen = ({ navigation }) => {
                 profile={p}
                 compact
                 onPress={() => onCardPress(p)}
-              />
-            ))}
-          </>
-        ) : null}
-
-        {(analysis?.missedCallsToReturn || []).length > 0 ? (
-          <>
-            <SectionHeader
-              title="Missed calls to return"
-              caption={Platform.OS !== 'android' ? 'Android only' : undefined}
-            />
-            {(analysis?.missedCallsToReturn || []).slice(0, 5).map((p) => (
-              <ReconnectCard
-                key={`m_${p.contact.normalized}`}
-                profile={p}
-                compact
-                onPress={() => onCardPress(p)}
-                onCall={() => onCall(p)}
               />
             ))}
           </>
@@ -412,6 +425,11 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     textAlign: 'center',
     paddingTop: theme.spacing.sm,
+  },
+  carousel: {
+    paddingLeft: theme.spacing.lg,
+    paddingRight: theme.spacing.lg,
+    paddingTop: theme.spacing.md,
   },
   statsRow: {
     flexDirection: 'row',

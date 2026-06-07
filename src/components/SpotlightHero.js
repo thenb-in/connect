@@ -7,131 +7,189 @@ import {
   formatLastSpoke,
   initialsFor,
 } from './ReconnectCard';
+import { WANT_TO_CONNECT_GROUP_ID } from '../storage';
 
 const firstNameOf = (name) => (name || '').trim().split(/\s+/)[0] || 'them';
 
 /**
- * The magnetic centrepiece of the home screen: one person pulled forward as
- * "the call to make right now", rendered as a bold, high-contrast hero with a
- * full-width call button — followed by a horizontal "up next" queue of the
- * other people worth reaching out to.
+ * A bold, high-contrast "spotlight" card that pulls one person forward as the
+ * call to make right now. Parametrised so the home carousel can render both the
+ * "Reach out today" card (teal) and the "Missed connections" card (terracotta)
+ * from the same component — they only differ in colour, kicker, and footer.
  *
- * This intentionally trades the calm, list-of-rows feel for a single focal
- * action. The reasoning copy and last-spoke formatting are shared with
- * ReconnectCard so the hero and the lanes below speak the same language.
+ * `width` is supplied by the carousel so each card is a fixed page width and
+ * the next one peeks ~10% to hint that it's swipeable.
  */
-const SpotlightHero = ({ hero, queue = [], onPress, onCall }) => {
-  if (!hero) return null;
-  const reason = reasonForProfile(hero);
-  const lastSpoke = formatLastSpoke(hero.summary);
-  const firstName = firstNameOf(hero.contact?.name);
-  const topGroup = hero.groups && hero.groups.length ? hero.groups[0] : null;
+const SpotlightCard = ({
+  profile,
+  width,
+  variant = 'primary',
+  kicker,
+  kickerIcon = 'lightning-bolt',
+  subline,
+  footerLabel,
+  onFooterPress,
+  emptyTitle,
+  emptyBody,
+  onPress,
+  onCall,
+}) => {
+  const bg = variant === 'accent' ? theme.colors.accent : theme.colors.primary;
+  const shadow = variant === 'accent' ? theme.colors.accent : theme.colors.primaryDark;
+
+  const Kicker = (
+    <View style={styles.kickerRow}>
+      <Icon name={kickerIcon} size={14} color={theme.colors.background} />
+      <Text style={styles.kicker}>{kicker}</Text>
+    </View>
+  );
+
+  // Empty state (e.g. no missed connections, but the card is force-shown).
+  if (!profile) {
+    return (
+      <View
+        style={[styles.card, { width, backgroundColor: bg, shadowColor: shadow }]}
+      >
+        <View style={styles.blobOne} pointerEvents="none" />
+        {Kicker}
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyTitle}>{emptyTitle}</Text>
+          {emptyBody ? <Text style={styles.emptyBody}>{emptyBody}</Text> : null}
+        </View>
+      </View>
+    );
+  }
+
+  const reason = reasonForProfile(profile);
+  const lastSpoke = formatLastSpoke(profile.summary);
+  const hasLastSpoke = lastSpoke !== 'Never';
+  const firstName = firstNameOf(profile.contact?.name);
+  // Skip the standard "Want to connect" group — it's a redundant label here.
+  const topGroup =
+    (profile.groups || []).find((g) => g.id !== WANT_TO_CONNECT_GROUP_ID) || null;
 
   return (
-    <View style={styles.wrap}>
-      <TouchableOpacity
-        style={styles.hero}
-        activeOpacity={0.92}
-        onPress={() => onPress?.(hero)}
-      >
-        {/* Decorative accent blobs so the card reads as energetic, not flat. */}
-        <View style={styles.blobOne} pointerEvents="none" />
-        <View style={styles.blobTwo} pointerEvents="none" />
+    <TouchableOpacity
+      style={[styles.card, { width, backgroundColor: bg, shadowColor: shadow }]}
+      activeOpacity={0.92}
+      onPress={() => onPress?.(profile)}
+    >
+      {/* Decorative accent blobs so the card reads as energetic, not flat. */}
+      <View style={styles.blobOne} pointerEvents="none" />
+      <View style={styles.blobTwo} pointerEvents="none" />
 
-        <View style={styles.kickerRow}>
-          <Icon name="lightning-bolt" size={14} color={theme.colors.background} />
-          <Text style={styles.kicker}>YOUR MOVE TODAY</Text>
+      {Kicker}
+      {subline ? <Text style={styles.subline}>{subline}</Text> : null}
+
+      <View style={styles.heroRow}>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{initialsFor(profile.contact?.name)}</Text>
         </View>
-
-        <View style={styles.heroRow}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initialsFor(hero.contact?.name)}</Text>
-          </View>
-          <View style={styles.heroBody}>
-            <Text style={styles.name} numberOfLines={1}>
-              {hero.contact?.name}
-            </Text>
-            <View style={styles.metaRow}>
-              {topGroup ? (
-                <View style={styles.groupPill}>
-                  <Text style={styles.groupPillText} numberOfLines={1}>
-                    {topGroup.name}
-                  </Text>
-                </View>
-              ) : null}
+        <View style={styles.heroBody}>
+          <Text style={styles.name} numberOfLines={2}>
+            {profile.contact?.name}
+          </Text>
+          <View style={styles.metaRow}>
+            {topGroup ? (
+              <View style={styles.groupPill}>
+                <Text style={styles.groupPillText} numberOfLines={1}>
+                  {topGroup.name}
+                </Text>
+              </View>
+            ) : null}
+            {hasLastSpoke ? (
               <Text style={styles.lastSpoke}>Last spoke {lastSpoke}</Text>
-            </View>
+            ) : null}
           </View>
         </View>
+      </View>
 
-        <Text style={styles.reason} numberOfLines={2}>
-          {reason}
-        </Text>
+      <Text style={styles.reason} numberOfLines={2}>
+        {reason}
+      </Text>
 
-        <TouchableOpacity
-          style={styles.callBtn}
-          activeOpacity={0.85}
-          onPress={() => onCall?.(hero)}
-        >
-          <Icon name="phone" size={20} color={theme.colors.surface} />
-          <Text style={styles.callBtnText}>Call {firstName}</Text>
-        </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.callBtn}
+        activeOpacity={0.85}
+        onPress={() => onCall?.(profile)}
+      >
+        <Icon name="phone" size={20} color={theme.colors.surface} />
+        <Text style={styles.callBtnText}>Call {firstName}</Text>
       </TouchableOpacity>
 
-      {queue.length > 0 ? (
-        <View style={styles.queueWrap}>
-          <Text style={styles.queueLabel}>Up next</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.queueRow}
-          >
-            {queue.map((p) => (
-              <TouchableOpacity
-                key={p.contact.normalized}
-                style={styles.queueItem}
-                activeOpacity={0.8}
-                onPress={() => onPress?.(p)}
-              >
-                <View style={styles.queueAvatar}>
-                  <Text style={styles.queueAvatarText}>
-                    {initialsFor(p.contact?.name)}
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.queueCall}
-                    activeOpacity={0.85}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                    onPress={() => onCall?.(p)}
-                  >
-                    <Icon name="phone" size={12} color={theme.colors.surface} />
-                  </TouchableOpacity>
-                </View>
-                <Text style={styles.queueName} numberOfLines={1}>
-                  {firstNameOf(p.contact?.name)}
-                </Text>
-                <Text style={styles.queueLast} numberOfLines={1}>
-                  {formatLastSpoke(p.summary)}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
+      {footerLabel ? (
+        <TouchableOpacity
+          style={styles.footer}
+          activeOpacity={0.7}
+          onPress={onFooterPress}
+        >
+          <Text style={styles.footerText}>{footerLabel}</Text>
+          <Icon name="chevron-right" size={16} color={theme.colors.surface} />
+        </TouchableOpacity>
       ) : null}
+    </TouchableOpacity>
+  );
+};
+
+/**
+ * The horizontal "up next" queue of other people worth reaching out to. Lives
+ * below the carousel (full width) so its horizontal scroll never fights the
+ * carousel's paging gesture.
+ */
+const UpNextRow = ({ items = [], onPress, onCall }) => {
+  if (!items.length) return null;
+  return (
+    <View style={styles.queueWrap}>
+      <Text style={styles.queueLabel}>Up next</Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.queueRow}
+      >
+        {items.map((p) => {
+          const last = formatLastSpoke(p.summary);
+          return (
+            <TouchableOpacity
+              key={p.contact.normalized}
+              style={styles.queueItem}
+              activeOpacity={0.8}
+              onPress={() => onPress?.(p)}
+            >
+              <View style={styles.queueAvatar}>
+                <Text style={styles.queueAvatarText}>
+                  {initialsFor(p.contact?.name)}
+                </Text>
+                <TouchableOpacity
+                  style={styles.queueCall}
+                  activeOpacity={0.85}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  onPress={() => onCall?.(p)}
+                >
+                  <Icon name="phone" size={12} color={theme.colors.surface} />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.queueName} numberOfLines={1}>
+                {firstNameOf(p.contact?.name)}
+              </Text>
+              {last !== 'Never' ? (
+                <Text style={styles.queueLast} numberOfLines={1}>
+                  {last}
+                </Text>
+              ) : null}
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  wrap: {
-    marginHorizontal: theme.spacing.lg,
-    marginTop: theme.spacing.md,
-  },
-  hero: {
-    backgroundColor: theme.colors.primary,
+  card: {
     borderRadius: theme.radius.lg,
     padding: theme.spacing.lg,
     overflow: 'hidden',
-    shadowColor: theme.colors.primaryDark,
+    minHeight: 196,
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.25,
     shadowRadius: 16,
@@ -153,12 +211,11 @@ const styles = StyleSheet.create({
     width: 140,
     height: 140,
     borderRadius: 70,
-    backgroundColor: 'rgba(224,120,86,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
   },
   kickerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: theme.spacing.md,
   },
   kicker: {
     color: theme.colors.background,
@@ -168,14 +225,20 @@ const styles = StyleSheet.create({
     marginLeft: 6,
     opacity: 0.9,
   },
+  subline: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: theme.font.tiny,
+    marginTop: 4,
+  },
   heroRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginTop: theme.spacing.md,
   },
   avatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: theme.colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
@@ -189,7 +252,7 @@ const styles = StyleSheet.create({
   heroBody: { flex: 1 },
   name: {
     color: theme.colors.surface,
-    fontSize: theme.font.h1,
+    fontSize: theme.font.h2,
     fontWeight: '800',
   },
   metaRow: {
@@ -226,15 +289,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.accent,
+    backgroundColor: 'rgba(0,0,0,0.18)',
     borderRadius: theme.radius.pill,
     paddingVertical: theme.spacing.md,
     marginTop: theme.spacing.lg,
-    shadowColor: theme.colors.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
   },
   callBtnText: {
     color: theme.colors.surface,
@@ -242,8 +302,37 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginLeft: theme.spacing.sm,
   },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: theme.spacing.md,
+  },
+  footerText: {
+    color: theme.colors.surface,
+    fontSize: theme.font.small,
+    fontWeight: '700',
+    opacity: 0.95,
+  },
+  emptyWrap: {
+    paddingVertical: theme.spacing.xl,
+    alignItems: 'center',
+  },
+  emptyTitle: {
+    color: theme.colors.surface,
+    fontSize: theme.font.h3,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  emptyBody: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: theme.font.small,
+    textAlign: 'center',
+    marginTop: 4,
+  },
   queueWrap: {
     marginTop: theme.spacing.lg,
+    marginHorizontal: theme.spacing.lg,
   },
   queueLabel: {
     fontSize: theme.font.tiny,
@@ -300,4 +389,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default SpotlightHero;
+export { SpotlightCard, UpNextRow };

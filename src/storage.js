@@ -33,6 +33,9 @@ const K = {
   // you", contact clustering, and the relationship-analysis step. Off by
   // default so first-run onboarding stays a quick import + hand-pick.
   ADVANCED_MODE: 'connect.advancedMode',
+  // iOS-only, advanced-mode opt-in: force-show home lanes that are normally
+  // hidden on iOS when they have no data (e.g. "Missed connections").
+  SHOW_HIDDEN_CARDS: 'connect.showHiddenCards',
   PERMS: 'connect.permsState',
   // Legacy single-key shape — migrated into LLM_KEYS / LLM_ACTIVE on first
   // read, then deleted. Kept here so clearConnectStorage still nukes them.
@@ -799,6 +802,17 @@ export const getAdvancedMode = () => Boolean(storage.getBoolean(K.ADVANCED_MODE)
 
 export const setAdvancedMode = (value) =>
   storage.set(K.ADVANCED_MODE, Boolean(value));
+
+// ---------- Show hidden cards (iOS) ----------
+// On iOS the call-history-derived home lanes are hidden when they have no data
+// (there's no call log to populate them). This advanced-mode toggle forces them
+// to show anyway, with their empty states — useful for debugging / power users.
+
+export const getShowHiddenCards = () =>
+  Boolean(storage.getBoolean(K.SHOW_HIDDEN_CARDS));
+
+export const setShowHiddenCards = (value) =>
+  storage.set(K.SHOW_HIDDEN_CARDS, Boolean(value));
 
 // ---------- Clear all (used by logout or factory reset) ----------
 

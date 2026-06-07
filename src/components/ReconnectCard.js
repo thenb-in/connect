@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
+import { WANT_TO_CONNECT_GROUP_ID } from '../storage';
 
 /**
  * Builds a single, gentle reason string describing why this contact is being
@@ -55,9 +56,15 @@ const initialsFor = (name) => {
 
 const ReconnectCard = ({ profile, onPress, onCall, compact = false }) => {
   if (!profile) return null;
-  const { contact, summary, groups } = profile;
+  const { contact, summary } = profile;
+  // The standard "Want to connect" group is a redundant label on a card, so
+  // never render it as a chip.
+  const groups = (profile.groups || []).filter(
+    (g) => g.id !== WANT_TO_CONNECT_GROUP_ID,
+  );
   const reason = reasonForProfile(profile);
   const lastSpoke = formatLastSpoke(summary);
+  const hasLastSpoke = lastSpoke !== 'Never';
 
   return (
     <TouchableOpacity
@@ -74,7 +81,9 @@ const ReconnectCard = ({ profile, onPress, onCall, compact = false }) => {
           <Text style={styles.name} numberOfLines={1}>
             {contact.name}
           </Text>
-          <Text style={styles.lastSpoke}>{lastSpoke}</Text>
+          {hasLastSpoke ? (
+            <Text style={styles.lastSpoke}>{lastSpoke}</Text>
+          ) : null}
         </View>
         <Text style={styles.reason} numberOfLines={2}>
           {reason}
