@@ -19,3 +19,19 @@ buildscript {
 }
 
 apply plugin: "com.facebook.react.rootproject"
+
+// 16 KB page-size support (Google Play requirement for 64-bit native libs).
+// NDK r27 still links at the legacy 4 KB page size by default, so third-party
+// modules that build their own .so (react-native-screens,
+// react-native-gesture-handler) ship 4 KB-aligned LOAD segments and fail the
+// 16 KB check. Inject the official NDK r27 CMake flag into every native
+// subproject so their segments align to 16 KB. RN core / Hermes / Fresco /
+// mmkv prebuilts are already 16 KB-aligned, so this is a no-op for them.
+// Drop this block once the project moves to NDK r28+ (16 KB is the default there).
+subprojects { subproject ->
+    def enable16k = {
+        subproject.android.defaultConfig.externalNativeBuild.cmake.arguments "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+    }
+    subproject.plugins.withId("com.android.library", enable16k)
+    subproject.plugins.withId("com.android.application", enable16k)
+}
