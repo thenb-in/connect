@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import { initialsFor } from './ReconnectCard';
+import { displayNameFor } from '../utils/displayName';
 import {
   UNKNOWN_GROUP_ID,
   getCardDismissalMap,
@@ -127,7 +128,7 @@ const SlotMachine = ({ profiles, totalContacts = 0, onCall, onOpenContact }) => 
   // First-name pool that the reels cycle through while spinning.
   const namePool = useMemo(() => {
     const names = (profiles || [])
-      .map((p) => firstNameOf(p.contact?.name))
+      .map((p) => firstNameOf(displayNameFor(p)))
       .filter(Boolean);
     return names.length ? names : ['Priya', 'Amit', 'Ravi', 'Neha', 'Sam'];
   }, [profiles]);
@@ -308,7 +309,7 @@ const SlotMachine = ({ profiles, totalContacts = 0, onCall, onOpenContact }) => 
           {picks.map((pk, i) => {
             const isSettled = phase === 'result' || settled[i];
             const name = isSettled
-              ? pk.profile.contact?.name || firstNameOf()
+              ? displayNameFor(pk.profile) || firstNameOf()
               : namePool[(tick + i * 2) % namePool.length];
             return (
               <Animated.View
@@ -328,7 +329,7 @@ const SlotMachine = ({ profiles, totalContacts = 0, onCall, onOpenContact }) => 
                   ]}
                 >
                   <Text style={styles.avatarText}>
-                    {isSettled ? initialsFor(pk.profile.contact?.name) : '?'}
+                    {isSettled ? initialsFor(displayNameFor(pk.profile)) : '?'}
                   </Text>
                 </View>
                 <TouchableOpacity

@@ -4,6 +4,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import { WANT_TO_CONNECT_GROUP_ID } from '../storage';
 import { calendarDaysSince, formatClockTime } from '../utils/dateUtils';
+import { displayNameFor } from '../utils/displayName';
 
 /**
  * Builds a single, gentle reason string describing why this contact is being
@@ -85,7 +86,8 @@ const initialsFor = (name) => {
 
 const ReconnectCard = ({ profile, onPress, onCall, compact = false }) => {
   if (!profile) return null;
-  const { contact, summary } = profile;
+  const { summary } = profile;
+  const displayName = displayNameFor(profile);
   // The standard "Want to connect" group is a redundant label on a card, so
   // never render it as a chip.
   const groups = (profile.groups || []).filter(
@@ -102,13 +104,13 @@ const ReconnectCard = ({ profile, onPress, onCall, compact = false }) => {
       activeOpacity={0.85}
     >
       <View style={styles.avatar}>
-        <Text style={styles.avatarText}>{initialsFor(contact.name)}</Text>
+        <Text style={styles.avatarText}>{initialsFor(displayName)}</Text>
       </View>
 
       <View style={styles.body}>
         <View style={styles.topRow}>
           <Text style={styles.name} numberOfLines={1}>
-            {contact.name}
+            {displayName}
           </Text>
           {hasLastSpoke ? (
             <Text style={styles.lastSpoke}>{lastSpoke}</Text>

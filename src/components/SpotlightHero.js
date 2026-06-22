@@ -8,6 +8,7 @@ import {
   initialsFor,
 } from './ReconnectCard';
 import { WANT_TO_CONNECT_GROUP_ID } from '../storage';
+import { displayNameFor } from '../utils/displayName';
 
 const firstNameOf = (name) => (name || '').trim().split(/\s+/)[0] || 'them';
 
@@ -74,7 +75,8 @@ const SpotlightCard = ({
   const reason = reasonForProfile(profile);
   const lastSpoke = formatLastSpoke(profile.summary);
   const hasLastSpoke = lastSpoke !== 'Never';
-  const firstName = firstNameOf(profile.contact?.name);
+  const displayName = displayNameFor(profile);
+  const firstName = firstNameOf(displayName);
   // Skip the standard "Want to connect" group (redundant label here) and any
   // raw "Cluster: …" name-token group (an internal signal, not a real label).
   const topGroup =
@@ -97,11 +99,11 @@ const SpotlightCard = ({
 
       <View style={styles.heroRow}>
         <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initialsFor(profile.contact?.name)}</Text>
+          <Text style={styles.avatarText}>{initialsFor(displayName)}</Text>
         </View>
         <View style={styles.heroBody}>
           <Text style={styles.name} numberOfLines={2}>
-            {profile.contact?.name}
+            {displayName}
           </Text>
           <View style={styles.metaRow}>
             {topGroup ? (
@@ -162,6 +164,7 @@ const UpNextRow = ({ items = [], onPress, onCall }) => {
       >
         {items.map((p) => {
           const last = formatLastSpoke(p.summary);
+          const pName = displayNameFor(p);
           return (
             <TouchableOpacity
               key={p.contact.normalized}
@@ -171,7 +174,7 @@ const UpNextRow = ({ items = [], onPress, onCall }) => {
             >
               <View style={styles.queueAvatar}>
                 <Text style={styles.queueAvatarText}>
-                  {initialsFor(p.contact?.name)}
+                  {initialsFor(pName)}
                 </Text>
                 <TouchableOpacity
                   style={styles.queueCall}
@@ -183,7 +186,7 @@ const UpNextRow = ({ items = [], onPress, onCall }) => {
                 </TouchableOpacity>
               </View>
               <Text style={styles.queueName} numberOfLines={1}>
-                {firstNameOf(p.contact?.name)}
+                {firstNameOf(pName)}
               </Text>
               {last !== 'Never' ? (
                 <Text style={styles.queueLast} numberOfLines={1}>

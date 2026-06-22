@@ -30,6 +30,7 @@ import { reasonForProfile } from '../components/ReconnectCard';
 import { initiateTrackedCall } from '../utils/makeImmediateCall';
 import { sendWhatsAppMessage } from '../utils/appShare';
 import { formatShortDateTime, formatDuration } from '../utils/dateUtils';
+import { displayNameFor } from '../utils/displayName';
 
 // Per call-type presentation for the "Recent calls" list. Missed and rejected
 // calls never connect, so they show a status word instead of a duration.
@@ -171,7 +172,7 @@ const ContactDetailScreen = ({ navigation, route }) => {
   return (
     <View style={styles.container}>
       <AppHeader
-        title={contact.name}
+        title={displayNameFor(profile)}
         subtitle={contact.phone}
         onBack={() => navigation.goBack()}
       />
