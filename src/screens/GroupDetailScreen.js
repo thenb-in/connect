@@ -1,17 +1,21 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Vibration } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import theme from '../theme';
 import AppHeader from '../components/AppHeader';
 import ContactSearchBar from '../components/ContactSearchBar';
+import ContactPickerModal from '../components/ContactPickerModal';
 import ReconnectCard from '../components/ReconnectCard';
 import EmptyState from '../components/EmptyState';
 import ConnectSetupGate from '../components/ConnectSetupGate';
 import { useConnectAnalysis } from '../hooks/useConnectAnalysis';
 import {
+  getContacts,
+  getContactGroupMap,
   getDisplayGroups,
+  addContactsToGroup,
   removeContactsFromGroup,
   UNKNOWN_GROUP_ID,
 } from '../storage';
@@ -30,6 +34,9 @@ const GroupDetailScreen = ({ navigation, route }) => {
   const [results, setResults] = useState([]);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
+  // The "Add contacts" picker: lets you drop any contact into this group
+  // straight from here, whether or not the group already has members.
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Re-read group membership from storage whenever this screen regains focus.
   // Tagging a contact into a group happens on the contact detail screen, which
@@ -129,6 +136,32 @@ const GroupDetailScreen = ({ navigation, route }) => {
     );
   }, [profiles, selected, group, groupId, exitSelectMode, reanalyzeFromCache]);
 
+  // Candidates for the picker = everyone not already in this group, so the
+  // shared ContactPickerModal only ever offers people you can actually add.
+  const addCandidates = useMemo(() => {
+    if (!pickerOpen) return [];
+    const map = getContactGroupMap();
+    return getContacts().filter((c) => {
+      const key = c.normalized;
+      return !key || !(map[key] || []).includes(groupId);
+    });
+  }, [pickerOpen, groupId]);
+
+  const onConfirmAdd = useCallback(
+    (phones) => {
+      setPickerOpen(false);
+      if (!phones || !phones.length) return;
+      const added = addContactsToGroup(phones, groupId);
+      Vibration.vibrate(40);
+      reanalyzeFromCache();
+      Alert.alert(
+        'Added',
+        `${added} ${added === 1 ? 'contact' : 'contacts'} added to "${group?.name || 'this group'}".`,
+      );
+    },
+    [groupId, group, reanalyzeFromCache],
+  );
+
   const renderItem = useCallback(
     ({ item }) => {
       if (!selectMode) {
@@ -202,12 +235,16 @@ const GroupDetailScreen = ({ navigation, route }) => {
           <EmptyState
             icon="account-plus-outline"
             title="No contacts in this group yet"
-            body="Open a contact and tap a group chip to add them."
+            body={
+              canSelect
+                ? 'Tap "Add contacts" below to drop people into this group.'
+                : 'Open a contact and tap a group chip to add them.'
+            }
           />
         }
         contentContainerStyle={{
           paddingTop: theme.spacing.md,
-          paddingBottom: selectMode ? 120 : theme.spacing.xxl,
+          paddingBottom: selectMode ? 120 : canSelect ? 120 : theme.spacing.xxl,
         }}
       />
       </ConnectSetupGate>
@@ -229,6 +266,29 @@ const GroupDetailScreen = ({ navigation, route }) => {
           </TouchableOpacity>
         </View>
       ) : null}
+
+      {!selectMode && canSelect ? (
+        <View style={[styles.footer, { paddingBottom: insets.bottom + theme.spacing.lg }]}>
+          <TouchableOpacity
+            style={styles.addBtn}
+            onPress={() => setPickerOpen(true)}
+            activeOpacity={0.85}
+          >
+            <Icon name="account-plus" size={18} color={theme.colors.surface} />
+            <Text style={styles.addBtnText}>Add contacts</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      <ContactPickerModal
+        visible={pickerOpen}
+        title={`Add to ${group?.name || 'group'}`}
+        subtitle="Search and pick the people to drop into this group."
+        contacts={addCandidates}
+        confirmLabel="Add to group"
+        onConfirm={onConfirmAdd}
+        onSkip={() => setPickerOpen(false)}
+      />
     </View>
   );
 };
@@ -291,6 +351,20 @@ const styles = StyleSheet.create({
     marginLeft: theme.spacing.sm,
   },
   btnDisabled: { opacity: 0.5 },
+  addBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: theme.spacing.md,
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.primary,
+  },
+  addBtnText: {
+    color: theme.colors.surface,
+    fontWeight: '700',
+    fontSize: theme.font.body,
+    marginLeft: theme.spacing.sm,
+  },
 });
 
 export default GroupDetailScreen;
