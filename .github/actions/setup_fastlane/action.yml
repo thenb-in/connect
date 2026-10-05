@@ -1,0 +1,37 @@
+name: 'Set up fastlane'
+description: 'Ruby from .ruby-version plus the Gemfile gems (fastlane) in vendor/bundle, on any runner'
+
+runs:
+  using: 'composite'
+  steps:
+    # GitHub-hosted: prebuilt Ruby from the tool cache, gems restored from the
+    # Actions cache (keyed on Gemfile.lock) instead of reinstalled every run.
+    - name: Set up Ruby (github-hosted)
+      if: runner.environment == 'github-hosted'
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: .ruby-version
+        bundler-cache: true
+
+    # Self-hosted Mac: the system Ruby (2.6) is too old for fastlane and
+    # ruby/setup-ruby needs a hosted-style tool cache, so use the keg-only
+    # Homebrew Ruby (what local releases use too). vendor/bundle persists in the
+    # workspace between runs, so no cache is needed.
+    - name: Set up Ruby (self-hosted)
+      if: runner.environment == 'self-hosted'
+      shell: bash
+      run: |
+        for p in /opt/homebrew/opt/ruby/bin /usr/local/opt/ruby/bin; do
+          if [ -x "$p/ruby" ]; then
+            echo "$p" >> "$GITHUB_PATH"
+            echo "Using Ruby at $p"
+            break
+          fi
+        done
+
+    - name: Install gems (self-hosted)
+      if: runner.environment == 'self-hosted'
+      shell: bash
+      run: |
+        bundle config set --local path vendor/bundle
+        bundle install

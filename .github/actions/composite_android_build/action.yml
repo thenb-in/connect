@@ -2,37 +2,49 @@ name: 'Android Build'
 description: 'Build Android AAB and APK files'
 
 inputs:
-  RELEASE_STORE_FILE:
+  ANDROID_KEYSTORE_BASE64:
     description: 'Base64 encoded keystore file (should decode to .keystore)'
     required: true
-  RELEASE_STORE_PASSWORD:
+  ANDROID_KEYSTORE_PASSWORD:
     description: 'Keystore password'
     required: true
-  RELEASE_KEY_ALIAS:
+  ANDROID_KEY_ALIAS:
     description: 'Key alias'
     required: true
-  RELEASE_KEY_PASSWORD:
+  ANDROID_KEY_PASSWORD:
     description: 'Key password'
     required: true
   TAG_NAME:
-    description: 'Git tag name (e.g., v1.2.3). When empty, version is set to timestamp-test.'
+    description: 'Release tag (e.g. 1.2.3; a leading "v" is tolerated). When empty, version is set to timestamp-test.'
     required: false
+  APP_NAME:
+    description: 'Prefix for the output file names (<APP_NAME>-<version>.apk/.aab).'
+    required: true
 
 outputs:
   VERSION_SUFFIX:
     description: 'Version suffix used for output filenames (tag name or timestamp-test)'
+    value: ${{ steps.version_tag.outputs.VERSION_SUFFIX || steps.version_test.outputs.VERSION_SUFFIX }}
+  APK:
+    description: 'Path to the signed, 16KB-aligned APK'
+    value: ${{ steps.rename.outputs.APK }}
+  AAB:
+    description: 'Path to the AAB (only built when TAG_NAME is set; empty otherwise)'
+    value: ${{ steps.rename.outputs.AAB }}
 
 runs:
   using: 'composite'
   steps:
     - name: Set up JDK 17
-      uses: actions/setup-java@v3
+      uses: actions/setup-java@v6
       with:
         distribution: 'temurin'
         java-version: '17'
+        # Caches ~/.gradle/caches + wrapper, keyed on the gradle files.
+        cache: 'gradle'
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v7
       with:
         node-version: '20'
         cache: 'npm'
@@ -40,94 +52,87 @@ runs:
     # Ensures ANDROID_HOME and cmdline-tools exist on self-hosted runners,
     # which don't ship the SDK preinstalled (unlike ubuntu-latest).
     - name: Set up Android SDK
-      uses: android-actions/setup-android@v3
+      uses: android-actions/setup-android@v4
       with:
         cmdline-tools-version: 14742923
+        # Default is 'tools platform-tools'; the legacy 'tools' package no longer
+        # exists in the SDK repo and makes sdkmanager exit 1.
+        packages: 'platform-tools'
 
-    # 16KB native library alignment requires NDK r27+. The build.gradle pins
-    # 27.1.12297006; install it explicitly so the linker emits .so files with
-    # 16KB-aligned LOAD segments on every CI runner.
-    - name: Install Android NDK 27.1.12297006 (16KB-aligned)
+    # 16KB native library alignment requires NDK r27+. Install exactly the NDK
+    # android/build.gradle pins (ndkVersion = "...") so the linker emits .so
+    # files with 16KB-aligned LOAD segments on every CI runner.
+    - name: Install Android NDK (16KB-aligned)
       shell: bash
       run: |
         set -e
+        NDK_VERSION=$(sed -n 's/.*ndkVersion *= *"\([^"]*\)".*/\1/p' android/build.gradle | head -n1)
+        if [ -z "$NDK_VERSION" ]; then
+          echo "::error file=android/build.gradle::ndkVersion = \"...\" not found"
+          exit 1
+        fi
+        echo "NDK from android/build.gradle: $NDK_VERSION"
         # setup-android installs cmdline-tools under a versioned dir
         # (e.g. cmdline-tools/14742923/), not cmdline-tools/latest/. Resolve
         # sdkmanager from PATH so we don't depend on the "latest" symlink.
         SDKMANAGER="$(command -v sdkmanager)"
         yes | "$SDKMANAGER" --licenses >/dev/null || true
-        "$SDKMANAGER" "ndk;27.1.12297006" "build-tools;35.0.0" "platforms;android-35"
-        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
-        echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
+        "$SDKMANAGER" "ndk;$NDK_VERSION" "build-tools;35.0.0" "platforms;android-35"
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> $GITHUB_ENV
+        echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> $GITHUB_ENV
 
+    # `npm install` runs the postinstall hook (patch-package), so native-module
+    # patches are re-applied before autolinking.
     - name: Install dependencies
       shell: bash
-      run: |
-        npm install
-        npm install -g react-native-cli
-
-    - name: Print input lengths for debugging
-      shell: bash
-      run: |
-        echo "RELEASE_STORE_FILE length: ${#RELEASE_STORE_FILE}"
-        echo "RELEASE_STORE_PASSWORD length: ${#RELEASE_STORE_PASSWORD}"
-        echo "RELEASE_KEY_ALIAS length: ${#RELEASE_KEY_ALIAS}"
-        echo "RELEASE_KEY_PASSWORD length: ${#RELEASE_KEY_PASSWORD}"
-        echo "TAG_NAME length: ${#TAG_NAME}"
-      env:
-        RELEASE_STORE_FILE: ${{ inputs.RELEASE_STORE_FILE }}
-        RELEASE_STORE_PASSWORD: ${{ inputs.RELEASE_STORE_PASSWORD }}
-        RELEASE_KEY_ALIAS: ${{ inputs.RELEASE_KEY_ALIAS }}
-        RELEASE_KEY_PASSWORD: ${{ inputs.RELEASE_KEY_PASSWORD }}
-        TAG_NAME: ${{ inputs.TAG_NAME }}
+      run: npm install
 
     - name: Decode keystore file
       shell: bash
       run: |
         mkdir -p android/app
-        echo "${{ inputs.RELEASE_STORE_FILE }}" | base64 --decode > android/app/release-key.keystore
+        echo "${{ inputs.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/release-key.keystore
 
     - name: Verify keystore file
       shell: bash
       run: |
         ls -l android/app/release-key.keystore
         command -v file >/dev/null && file android/app/release-key.keystore || echo "(file command not available, skipping type check)"
-        keytool -list -keystore android/app/release-key.keystore -storepass "${{ inputs.RELEASE_STORE_PASSWORD }}" || {
+        keytool -list -keystore android/app/release-key.keystore -storepass "${{ inputs.ANDROID_KEYSTORE_PASSWORD }}" || {
           echo "Keystore file is invalid or corrupted"
           exit 1
         }
 
+    # build.gradle reads these ANDROID_* gradle properties for the release
+    # signingConfig.
     - name: Set signing configs in gradle.properties
       shell: bash
       run: |
-        echo "RELEASE_STORE_FILE=release-key.keystore" >> android/gradle.properties
-        echo "RELEASE_STORE_PASSWORD=${{ inputs.RELEASE_STORE_PASSWORD }}" >> android/gradle.properties
-        echo "RELEASE_KEY_ALIAS=${{ inputs.RELEASE_KEY_ALIAS }}" >> android/gradle.properties
-        echo "RELEASE_KEY_PASSWORD=${{ inputs.RELEASE_KEY_PASSWORD }}" >> android/gradle.properties
+        echo "ANDROID_KEYSTORE_PASSWORD=${{ inputs.ANDROID_KEYSTORE_PASSWORD }}" >> android/gradle.properties
+        echo "ANDROID_KEY_ALIAS=${{ inputs.ANDROID_KEY_ALIAS }}" >> android/gradle.properties
+        echo "ANDROID_KEY_PASSWORD=${{ inputs.ANDROID_KEY_PASSWORD }}" >> android/gradle.properties
 
-    - name: Set VERSION_SUFFIX for release (when TAG_NAME is provided)
-      if: ${{ inputs.TAG_NAME }}
-      shell: bash
-      run: |
-        echo "VERSION_SUFFIX=${{ inputs.TAG_NAME }}" >> $GITHUB_OUTPUT
-        echo "BUILD_VERSION_SUFFIX=${{ inputs.TAG_NAME }}" >> $GITHUB_ENV
-
-    - name: Set versionCode and versionName (if TAG_NAME is provided)
+    - name: Set versionCode and versionName (release, when TAG_NAME is provided)
+      id: version_tag
       if: ${{ inputs.TAG_NAME }}
       shell: bash
       run: |
         TAG_NAME="${{ inputs.TAG_NAME }}"
         VERSION_NAME="${TAG_NAME#v}"
         IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_NAME"
+        MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
         VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
 
         echo "Parsed versionName: $VERSION_NAME"
         echo "Calculated versionCode: $VERSION_CODE"
+        echo "VERSION_SUFFIX=$TAG_NAME" >> $GITHUB_OUTPUT
+        echo "BUILD_VERSION_SUFFIX=$TAG_NAME" >> $GITHUB_ENV
 
-         sed -i "/defaultConfig {/,/}/ s/versionCode [0-9]\+/versionCode $VERSION_CODE/" android/app/build.gradle
-         sed -i "/defaultConfig {/,/}/ s/versionName \".*\"/versionName \"$VERSION_NAME\"/" android/app/build.gradle
+        sed -i "/defaultConfig {/,/}/ s/versionCode [0-9]\+/versionCode $VERSION_CODE/" android/app/build.gradle
+        sed -i "/defaultConfig {/,/}/ s/versionName \".*\"/versionName \"$VERSION_NAME\"/" android/app/build.gradle
 
     - name: Set versionCode and versionName for build (timestamp-test)
+      id: version_test
       if: ${{ !inputs.TAG_NAME }}
       shell: bash
       run: |
@@ -139,15 +144,22 @@ runs:
         sed -i "/defaultConfig {/,/}/ s/versionCode [0-9]\+/versionCode $VERSION_CODE/" android/app/build.gradle
         sed -i "/defaultConfig {/,/}/ s/versionName \".*\"/versionName \"$BUILD_SUFFIX\"/" android/app/build.gradle
 
-    - name: Build release AAB and APK
+    # The AAB is only needed for store uploads, so it's built for tagged
+    # (release) builds only; every build gets the APK.
+    - name: Build release APK (+ AAB when TAG_NAME is set)
       shell: bash
+      env:
+        TASKS: ${{ inputs.TAG_NAME && 'bundleRelease assembleRelease' || 'assembleRelease' }}
       run: |
+        set -o pipefail
         cd android
-        ./gradlew clean bundleRelease assembleRelease --no-daemon > ../build.log 2>&1
+        echo "Gradle tasks: $TASKS"
+        # Stream to the job log and keep a copy for the failure artifact.
+        ./gradlew clean $TASKS --no-daemon --console=plain 2>&1 | tee ../build.log
 
     - name: Upload logs on failure
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: build-logs
         path: build.log
@@ -174,16 +186,16 @@ runs:
 
         "$APKSIGNER" sign \
           --ks android/app/release-key.keystore \
-          --ks-pass pass:"$RELEASE_STORE_PASSWORD" \
-          --ks-key-alias "$RELEASE_KEY_ALIAS" \
-          --key-pass pass:"$RELEASE_KEY_PASSWORD" \
+          --ks-pass pass:"$ANDROID_KEYSTORE_PASSWORD" \
+          --ks-key-alias "$ANDROID_KEY_ALIAS" \
+          --key-pass pass:"$ANDROID_KEY_PASSWORD" \
           "$APK_IN"
 
         "$ZIPALIGN" -c -v -P 16 4 "$APK_IN"
       env:
-        RELEASE_STORE_PASSWORD: ${{ inputs.RELEASE_STORE_PASSWORD }}
-        RELEASE_KEY_ALIAS: ${{ inputs.RELEASE_KEY_ALIAS }}
-        RELEASE_KEY_PASSWORD: ${{ inputs.RELEASE_KEY_PASSWORD }}
+        ANDROID_KEYSTORE_PASSWORD: ${{ inputs.ANDROID_KEYSTORE_PASSWORD }}
+        ANDROID_KEY_ALIAS: ${{ inputs.ANDROID_KEY_ALIAS }}
+        ANDROID_KEY_PASSWORD: ${{ inputs.ANDROID_KEY_PASSWORD }}
 
     # Verify every .so shipped inside the APK has 16KB-aligned LOAD segments.
     # The OS will refuse to mmap libs on 16KB-page devices otherwise, so fail
@@ -226,15 +238,33 @@ runs:
           exit 1
         fi
 
-    - name: Rename APK and AAB with version suffix
+    - name: Rename APK (and AAB) with version suffix
+      id: rename
       shell: bash
+      env:
+        APP_NAME: ${{ inputs.APP_NAME }}
       run: |
+        set -euo pipefail
         SUFFIX="${BUILD_VERSION_SUFFIX}"
-        mv android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/connect-${SUFFIX}.apk"
-        mv android/app/build/outputs/bundle/release/app-release.aab "android/app/build/outputs/bundle/release/connect-${SUFFIX}.aab"
-        echo "Outputs: connect-${SUFFIX}.apk, connect-${SUFFIX}.aab"
+        APK="android/app/build/outputs/apk/release/${APP_NAME}-${SUFFIX}.apk"
+        mv android/app/build/outputs/apk/release/app-release.apk "$APK"
+        echo "APK=$APK" >> "$GITHUB_OUTPUT"
+        echo "Output: $APK"
+        if [ -f android/app/build/outputs/bundle/release/app-release.aab ]; then
+          AAB="android/app/build/outputs/bundle/release/${APP_NAME}-${SUFFIX}.aab"
+          mv android/app/build/outputs/bundle/release/app-release.aab "$AAB"
+          echo "AAB=$AAB" >> "$GITHUB_OUTPUT"
+          echo "Output: $AAB"
+        fi
 
-    - name: Clean gradle.properties
+    # Always runs (even after a failed step): self-hosted runners keep the
+    # workspace between jobs, so don't leave the keystore, signing passwords
+    # or .env on disk.
+    - name: Remove signing material
+      if: always()
       shell: bash
       run: |
-        sed -i '/RELEASE_STORE_FILE\|RELEASE_STORE_PASSWORD\|RELEASE_KEY_ALIAS\|RELEASE_KEY_PASSWORD/d' android/gradle.properties
+        rm -f android/app/release-key.keystore .env
+        if [ -f android/gradle.properties ]; then
+          sed -i '/^ANDROID_KEY/d' android/gradle.properties
+        fi

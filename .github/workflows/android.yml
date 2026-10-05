@@ -1,0 +1,206 @@
+name: Android
+
+# One workflow for every Android build:
+#  - push/PR to main            -> timestamp-test APK, uploaded as an artifact
+#  - GitHub Release published   -> versioned APK + AAB from the release tag (e.g. 1.2.3),
+#                                  attached to that Release, and the AAB uploaded to Google
+#                                  Play via android/fastlane (release notes -> "What's new");
+#                                  no workflow artifacts are left on the run: release
+#                                  assets don't count toward the capped artifact storage
+#                                  (ios-release.yml fires on the same event)
+#  - manual run (Actions tab)   -> with a tag: APK + AAB artifacts; empty tag: timestamp-test APK
+#
+# Artifacts (non-release runs) are uploaded unzipped (archive: false): each is
+# the .apk/.aab file itself, named after the file.
+#
+# Runner: push/PR/manual builds run on a self-hosted Linux runner (a manual
+# run can pick github-hosted instead). A published release is too important to
+# wait on a self-hosted runner being online, so it always runs github-hosted.
+#
+# Shared verbatim between app repos: everything app-specific is derived at run
+# time (file names from the repo name, NDK from android/build.gradle).
+on:
+  push:
+    branches:
+      - master
+  release:
+    types: [published]
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Version tag (e.g. 1.2.3). Leave empty for a timestamp-test build.'
+        required: false
+      runner:
+        description: 'Where the build runs. Published releases always use github-hosted.'
+        required: true
+        default: 'self-hosted'
+        type: choice
+        options:
+          - self-hosted
+          - github-hosted
+
+# Read-only by default; each job asks for only what it needs.
+permissions:
+  contents: read
+
+# A newer commit makes an in-flight push/PR build pointless, so cancel the
+# superseded one. Releases and manual runs are never cancelled (each event +
+# ref is its own group, so they can't cancel each other either).
+concurrency:
+  group: android-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    # The one place the hosting is decided (see the header).
+    runs-on: ${{ fromJSON((github.event_name == 'release' || inputs.runner == 'github-hosted') && '"ubuntu-latest"' || '["self-hosted","Linux"]') }}
+    timeout-minutes: 60
+    permissions:
+      # Attach the APK + AAB to the GitHub Release.
+      contents: write
+      # Prune old artifacts.
+      actions: write
+    env:
+      # Don't run husky install in CI (no-op where husky isn't used).
+      HUSKY: 0
+    steps:
+      # On PRs build the branch head rather than the merge commit; on a
+      # release github.ref is the release tag.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+
+      # .env comes from .env.example; the optional API_URL secret overrides
+      # API_BASE_URL (react-native-dotenv inlines it into the JS bundle).
+      - name: Setup env
+        env:
+          API_URL: ${{ secrets.API_URL }}
+        run: |
+          if [ -f .env.example ]; then cp .env.example .env; else : > .env; fi
+          if [ -n "$API_URL" ]; then
+            grep -v '^API_BASE_URL=' .env > .env.tmp || true
+            echo "API_BASE_URL=$API_URL" >> .env.tmp
+            mv .env.tmp .env
+            echo "API_BASE_URL overridden from the API_URL secret"
+          fi
+
+      # Traceability: once a release has its AAB attached, never rebuild it — a
+      # re-run must ship the exact binary that's on the Release. If it's already
+      # there, skip the build + the attach; the release job downloads and ships
+      # the attached AAB regardless.
+      - name: Reuse the artifacts already on the Release (skip rebuild)
+        id: existing
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ github.ref_name }}" -R "${{ github.repository }}" --json assets -q '.assets[].name' | grep -q '\.aab$'; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "AAB already attached to ${{ github.ref_name }} — not rebuilding; the release job ships the attached binary."
+          fi
+
+      # TAG_NAME: the release tag on a published release, the input on a
+      # manual run, empty otherwise (-> the composite produces a
+      # timestamp-test build).
+      - name: Build Android (APK + AAB)
+        id: build
+        if: steps.existing.outputs.present != 'true'
+        uses: ./.github/actions/composite_android_build
+        with:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          TAG_NAME: ${{ github.event_name == 'release' && github.ref_name || github.event.inputs.tag_name }}
+          APP_NAME: ${{ github.event.repository.name }}
+
+      # Timestamp-test APKs are throwaway: prune them after 3 hours (the
+      # 30-day retention-days below is only a hard cap — days is the finest
+      # unit it accepts). skip-recent keeps the 2 latest regardless of age.
+      - name: Remove old artifacts
+        if: github.event_name != 'release'
+        uses: c-hive/gha-remove-artifacts@v1
+        with:
+          age: '3 hours'
+          skip-recent: 2
+
+      # Straight to the Release, so a release run stores no workflow artifacts;
+      # the release job fetches the AAB from there. No --clobber: the reuse
+      # guard above means we only attach when nothing is there yet, so these are
+      # always the one and only binaries for the Release.
+      - name: Attach to GitHub Release
+        if: github.event_name == 'release' && steps.existing.outputs.present != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK: ${{ steps.build.outputs.APK }}
+          AAB: ${{ steps.build.outputs.AAB }}
+        run: gh release upload "${{ github.ref_name }}" "$APK" "$AAB"
+
+      - name: Upload APK
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.build.outputs.APK }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      # Only tagged (release) builds produce an AAB.
+      - name: Upload AAB
+        if: github.event_name != 'release' && steps.build.outputs.AAB != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.build.outputs.AAB }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+  # Separate job so a failed Play upload is re-run on its own, without a
+  # rebuild.
+  release:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Download the AAB from the GitHub Release.
+      contents: read
+      # Keyless Google Play auth (Workload Identity Federation).
+      id-token: write
+    steps:
+      # For android/fastlane + the Gemfile (Play upload below). Runs first:
+      # checkout empties the workspace.
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download AAB from the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${{ github.ref_name }}" --pattern '*.aab' --dir dist
+
+      - name: Set up fastlane
+        uses: ./.github/actions/setup_fastlane
+
+      # Full release -> production, prerelease -> internal. The Release body
+      # becomes Play's "What's new". See android/fastlane/Fastfile.
+      # No service-account key (the GCP org forbids them): GitHub's OIDC token
+      # is exchanged for short-lived credentials of the Play service account,
+      # which supply picks up via GOOGLE_APPLICATION_CREDENTIALS.
+      - name: Authenticate to Google Play
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ANDROID_PLAY_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.ANDROID_PLAY_SERVICE_ACCOUNT }}
+
+      - name: Upload AAB to Google Play
+        working-directory: android
+        env:
+          SUPPLY_TRACK: ${{ github.event.release.prerelease && 'internal' || 'production' }}
+          RELEASE_NOTES: ${{ github.event.release.body }}
+          FASTLANE_HIDE_CHANGELOG: 'true'
+          FASTLANE_SKIP_UPDATE_CHECK: '1'
+        run: SUPPLY_AAB="$(find ../dist -name '*.aab')" bundle exec fastlane android upload

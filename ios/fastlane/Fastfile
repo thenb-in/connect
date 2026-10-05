@@ -1,0 +1,322 @@
+# iOS release automation, shared verbatim between app repos. Everything
+# app-specific comes from ios/fastlane/Appfile (app_identifier, team_id) or the
+# single ios/*.xcworkspace (workspace + scheme of the same name).
+#
+# Signing and upload use an App Store Connect API key, so there is no Apple ID
+# password and no interactive 2FA. The distribution certificate and the App Store
+# provisioning profile are created/refreshed automatically by xcodebuild via
+# `-allowProvisioningUpdates` plus the `-authenticationKey*` flags (cloud-managed
+# signing, authorised by the API key), so there is no fastlane `match` repo to
+# maintain and no Apple ID has to be signed in to Xcode — builds work the same
+# on the self-hosted Mac and on a fresh GitHub-hosted runner.
+#
+# The API key is resolved from whichever source is available:
+#   * CI    — APPLE_API_KEY_BASE64 holds the base64 of the .p8
+#   * local — ../.secrets/AuthKey_<KEY_ID>.p8 on disk (that folder is gitignored)
+#
+# Version numbers:
+#   * Marketing version: APP_VERSION_NAME (CI: the git tag, e.g. 1.2.3), else
+#     whatever is in the project.
+#   * Build number: always one past the latest upload on App Store Connect (any
+#     version, failed uploads included). Apple requires build numbers to rise
+#     within a version, so deriving them from the tag would collide with any
+#     earlier upload of that version (e.g. a manual TestFlight build). iOS build
+#     numbers therefore don't mirror Android's versionCode.
+#
+# Lanes — one per CI job, so a failed step is re-run on its own without
+# rebuilding (see .github/workflows/ios-release.yml):
+#   bundle exec fastlane ios build     build the signed .ipa into ios/build (macOS)
+#   bundle exec fastlane ios validate  ask Apple to validate ios/build/*.ipa, no upload (macOS)
+#   bundle exec fastlane ios upload    send ios/build/*.ipa to TestFlight, no waiting (macOS)
+#   bundle exec fastlane ios publish [submit:true]
+#                                      wait for Apple's processing, set the release
+#                                      notes, optionally submit for App Store review.
+#                                      API only, so CI runs it on cheap Linux.
+#   bundle exec fastlane ios check     verify the API key, no build
+#   bundle exec fastlane ios create_app  one-time: register the bundle ID + app record
+#
+# Release notes: RELEASE_NOTES (CI: the GitHub Release body) becomes the
+# TestFlight "What to Test" and, with submit:true, the App Store "What's New".
+# See scripts/release_notes.rb.
+
+require "base64"
+require "fileutils"
+require "tmpdir"
+require_relative "../../scripts/release_notes"
+
+default_platform(:ios)
+
+# Local credentials live in the gitignored ../.secrets/asc.env as KEY=VALUE
+# lines. Real environment variables always win, so CI is unaffected.
+local_env = File.expand_path("../../../.secrets/asc.env", __FILE__)
+if File.exist?(local_env)
+  File.readlines(local_env).each do |line|
+    line = line.strip
+    next if line.empty? || line.start_with?("#")
+
+    key, value = line.split("=", 2)
+    next if key.nil? || value.nil?
+
+    ENV[key.strip] ||= value.strip
+  end
+end
+
+workspaces = Dir[File.expand_path("../../*.xcworkspace", __FILE__)]
+UI.user_error!("Expected exactly one ios/*.xcworkspace, found #{workspaces.size}") unless workspaces.size == 1
+
+WORKSPACE    = File.basename(workspaces.first)
+SCHEME       = File.basename(WORKSPACE, ".xcworkspace")
+APP_ID       = CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
+DEFAULT_TEAM = CredentialsManager::AppfileConfig.try_fetch_value(:team_id)
+# CI passes the repo name; locally fall back to the scheme.
+IPA_PREFIX   = ENV["APP_NAME"].to_s.strip.empty? ? SCHEME : ENV["APP_NAME"].strip
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+# The .ipa to upload/validate. Like Android's SUPPLY_AAB, the CI workflow finds
+# the built binary with the shell and passes its path in IOS_IPA, so the lanes
+# never glob for it: a bare "build/*.ipa" glob would run from the fastlane/
+# subfolder (fastlane evaluates lane bodies there), not from ios/build.
+def ipa_path
+  path = ENV["IOS_IPA"].to_s.strip
+  UI.user_error!("Set IOS_IPA to the .ipa to upload (CI sets it; locally e.g. IOS_IPA=build/#{IPA_PREFIX}.ipa)") if path.empty?
+  path
+end
+
+def team_id
+  value = ENV["APPLE_TEAM_ID"].to_s.strip
+  value = DEFAULT_TEAM.to_s.strip if value.empty?
+  UI.user_error!("Set APPLE_TEAM_ID or team_id in ios/fastlane/Appfile") if value.empty?
+  value
+end
+
+# Returns the api_key hash `upload_to_testflight` / `deliver` expect, and which
+# also authorises xcodebuild's automatic provisioning.
+def asc_api_key
+  key_id    = ENV["APPLE_API_KEY_ID"].to_s.strip
+  issuer_id = ENV["APPLE_API_ISSUER_ID"].to_s.strip
+
+  if key_id.empty? || issuer_id.empty?
+    UI.user_error!(
+      "APPLE_API_KEY_ID and APPLE_API_ISSUER_ID must be set. Locally, put them in " \
+      "../.secrets/asc.env (see docs/APP_STORE_SUBMISSION.md); in CI they come " \
+      "from repository secrets."
+    )
+  end
+
+  key_content = ENV["APPLE_API_KEY_BASE64"].to_s.strip
+
+  if key_content.empty?
+    # Local: read the .p8 straight off disk.
+    path = ENV["APPLE_API_KEY_PATH"].to_s.strip
+    path = File.expand_path("../../../.secrets/AuthKey_#{key_id}.p8", __FILE__) if path.empty?
+
+    unless File.exist?(path)
+      UI.user_error!("App Store Connect key not found at #{path}. Set APPLE_API_KEY_PATH or drop the .p8 there.")
+    end
+
+    UI.message("Using App Store Connect key from #{path}")
+    app_store_connect_api_key(
+      key_id: key_id,
+      issuer_id: issuer_id,
+      key_filepath: path,
+      in_house: false,
+    )
+  else
+    # CI: the key arrives base64-encoded in an env var.
+    UI.message("Using App Store Connect key from APPLE_API_KEY_BASE64")
+    app_store_connect_api_key(
+      key_id: key_id,
+      issuer_id: issuer_id,
+      key_content: key_content,
+      is_key_content_base64: true,
+      in_house: false,
+    )
+  end
+end
+
+# One past the latest upload on App Store Connect (see "Version numbers" above).
+# initial_build_number: 0 makes the app's very first upload build 1.
+def resolve_build_number(api_key)
+  latest = latest_testflight_build_number(
+    api_key: api_key,
+    app_identifier: APP_ID,
+    initial_build_number: 0,
+  )
+  (latest.to_i + 1).to_s
+end
+
+# xcodebuild's own API-key flags, so it can sign (cloud-managed certificate) and
+# fetch profiles without an Apple ID in Xcode. xcodebuild only takes the key as a
+# file, so it is written to key_dir.
+def xcodebuild_auth_args(api_key, key_dir)
+  key = api_key[:key]
+  key = Base64.decode64(key) if api_key[:is_key_content_base64]
+  path = File.join(key_dir, "AuthKey_#{api_key[:key_id]}.p8")
+  File.write(path, key)
+
+  [
+    "-allowProvisioningUpdates",
+    "-authenticationKeyPath #{path}",
+    "-authenticationKeyID #{api_key[:key_id]}",
+    "-authenticationKeyIssuerID #{api_key[:issuer_id]}",
+  ]
+end
+
+# Shared build step. Returns the path to the exported .ipa.
+def build_ipa(api_key)
+  version_name = ENV["APP_VERSION_NAME"].to_s.strip
+  build_number = resolve_build_number(api_key)
+
+  UI.message("Building #{version_name.empty? ? '(project version)' : version_name} (#{build_number}) for team #{team_id}")
+
+  key_dir = Dir.mktmpdir("asc-key")
+  auth_args = xcodebuild_auth_args(api_key, key_dir)
+
+  # gym has no api_key: option, so xcodebuild gets the App Store Connect key as the
+  # -authenticationKey* flags through xcargs. gym forwards xcargs to BOTH the
+  # archive and the export step, so the flags reach each exactly once. Do NOT also
+  # set export_xcargs with them, or they appear twice on export, which Xcode 26's
+  # xcodebuild rejects with "-authenticationKeyPath may only be provided once".
+  xcargs = auth_args.dup
+  xcargs << "MARKETING_VERSION=#{version_name}" unless version_name.empty?
+  xcargs << "CURRENT_PROJECT_VERSION=#{build_number}"
+  xcargs << "DEVELOPMENT_TEAM=#{team_id}"
+
+  # JS deps are installed by the CI workflow; pods are cheap to re-resolve and
+  # must match the checked-in Podfile.lock.
+  cocoapods(use_bundle_exec: true, try_repo_update_on_error: true)
+
+  output_name = version_name.empty? ? "#{IPA_PREFIX}.ipa" : "#{IPA_PREFIX}-#{version_name}.ipa"
+
+  begin
+    build_app(
+      workspace: WORKSPACE,
+      scheme: SCHEME,
+      configuration: "Release",
+      export_method: "app-store",
+      output_directory: "build",
+      output_name: output_name,
+      clean: true,
+      xcargs: xcargs.join(" "),
+      export_options: {
+        method: "app-store",
+        teamID: team_id,
+        signingStyle: "automatic",
+        uploadSymbols: true,
+      },
+    )
+  ensure
+    FileUtils.rm_rf(key_dir)
+  end
+end
+
+# ── Lanes ────────────────────────────────────────────────────────────────────
+
+platform :ios do
+  desc "Verify the App Store Connect credentials without building anything"
+  lane :check do
+    api_key = asc_api_key
+    latest = latest_testflight_build_number(api_key: api_key, app_identifier: APP_ID)
+    UI.success("Authenticated. Team #{team_id}, app #{APP_ID}, latest TestFlight build: #{latest}")
+  end
+
+  desc "One-time: register the bundle ID and create the App Store Connect app record"
+  lane :create_app do |options|
+    produce(
+      api_key: asc_api_key,
+      app_identifier: APP_ID,
+      app_name: options[:app_name] || SCHEME,
+      language: options[:language] || "English (U.K.)",
+      team_id: team_id,
+    )
+  end
+
+  desc "Build the signed App Store .ipa into ios/build"
+  lane :build do
+    build_ipa(asc_api_key)
+  end
+
+  desc "Validate ios/build/*.ipa with App Store Connect without uploading it (no build number used)"
+  lane :validate do
+    upload_to_app_store(
+      api_key: asc_api_key,
+      ipa: ipa_path,
+      app_identifier: APP_ID,
+      verify_only: true,
+    )
+  end
+
+  desc "Upload ios/build/*.ipa to TestFlight and return without waiting for processing"
+  lane :upload do
+    upload_to_testflight(
+      api_key: asc_api_key,
+      ipa: ipa_path,
+      app_identifier: APP_ID,
+      skip_waiting_for_build_processing: true,
+    )
+  end
+
+  desc "Wait for APP_VERSION_NAME (APP_BUILD_NUMBER) to process, set the release notes, submit:true also submits for App Store review"
+  lane :publish do |options|
+    api_key = asc_api_key
+    version = ENV["APP_VERSION_NAME"]
+    build_number = ENV["APP_BUILD_NUMBER"]
+    notes = ReleaseNotes.from_env
+
+    build = FastlaneCore::BuildWatcher.wait_for_build_processing_to_be_complete(
+      app_id: Spaceship::ConnectAPI::App.find(APP_ID).id,
+      platform: "ios",
+      app_version: version,
+      build_version: build_number,
+      poll_interval: 30,
+      return_spaceship_testflight_build: false,
+    )
+    # The watcher only waits until processing stops; a build Apple rejected
+    # while processing ends up INVALID and must not go further.
+    unless build.processing_state == "VALID"
+      UI.user_error!("#{APP_ID} #{version} (#{build_number}) finished processing as #{build.processing_state} — see Apple's email or App Store Connect → TestFlight for the reason")
+    end
+
+    # TestFlight "What to Test".
+    upload_to_testflight(
+      api_key: api_key,
+      app_identifier: APP_ID,
+      app_platform: "ios",
+      distribute_only: true,
+      app_version: version,
+      build_number: build_number,
+      changelog: notes,
+    ) if notes
+
+    next unless options[:submit]
+
+    upload_to_app_store(
+      api_key: api_key,
+      app_identifier: APP_ID,
+      app_version: version,
+      build_number: build_number,
+      skip_binary_upload: true,
+      submit_for_review: true,
+      automatic_release: true,        # go live automatically once Apple approves (no manual "Release"), matching Play production
+      force: true,                    # skip the HTML preview prompt
+      precheck_include_in_app_purchases: false,
+      skip_screenshots: true,         # manage screenshots in App Store Connect
+      # Listing text is managed in App Store Connect; the only metadata sent is
+      # "What's New" (for every listing language), when there are notes.
+      # deliver skips it on the app's very first version, where Apple forbids it.
+      skip_metadata: notes.nil?,
+      # deliver only expands a "default" locale into real ones when other locales
+      # are already present; with no ios/fastlane/metadata folder it just drops
+      # "default" and uploads nothing. Target the primary locale directly — the
+      # same en-US the Android changelog uses. Adjust if the App Store primary
+      # locale isn't en-US.
+      release_notes: notes && { "en-US" => notes },
+      submission_information: {
+        # No IDFA / ad network SDKs — see PrivacyInfo.xcprivacy (NSPrivacyTracking = false).
+        add_id_info_uses_idfa: false,
+        export_compliance_uses_encryption: false,
+      },
+    )
+  end
+end

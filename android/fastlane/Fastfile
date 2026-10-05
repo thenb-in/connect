@@ -1,0 +1,43 @@
+# Android release automation, shared verbatim between app repos. Everything
+# app-specific comes from android/fastlane/Appfile (package_name).
+#
+# Gradle builds and signs the AAB (.github/actions/composite_android_build);
+# this uploads it to Google Play with the GitHub Release notes as "What's new".
+# supply reads everything else from its own env vars, which
+# .github/workflows/android.yml sets:
+#   SUPPLY_AAB            path to the AAB
+#   SUPPLY_TRACK          internal | alpha | beta | production
+#
+# Credentials come from GOOGLE_APPLICATION_CREDENTIALS, written by the workflow's
+# keyless (Workload Identity Federation) auth step.
+#
+# Play only accepts API uploads after a first release was uploaded by hand.
+
+require "tmpdir"
+require_relative "../../scripts/release_notes"
+
+default_platform(:android)
+
+platform :android do
+  desc "Upload SUPPLY_AAB to the SUPPLY_TRACK track on Google Play"
+  lane :upload do
+    notes = ReleaseNotes.from_env
+
+    Dir.mktmpdir do |metadata_path|
+      # supply only reads notes from a metadata folder; default.txt applies to
+      # whichever version code is uploaded. Play caps "What's new" at 500 characters.
+      changelogs = File.join(metadata_path, "en-US", "changelogs")
+      FileUtils.mkdir_p(changelogs)
+      File.write(File.join(changelogs, "default.txt"), notes.to_s[0, 500])
+
+      upload_to_play_store(
+        metadata_path: metadata_path,
+        skip_upload_apk: true,
+        skip_upload_metadata: true,
+        skip_upload_images: true,
+        skip_upload_screenshots: true,
+        skip_upload_changelogs: notes.nil?,
+      )
+    end
+  end
+end

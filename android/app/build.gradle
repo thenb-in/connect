@@ -95,14 +95,14 @@ android {
         release {
             // The CI pipeline (composite_android_build) decodes the base64
             // keystore secret to release-key.keystore and writes the
-            // RELEASE_* properties into gradle.properties. For local release
+            // ANDROID_* properties into gradle.properties. For local release
             // builds without those properties, fall back to the debug keystore
             // so `assembleRelease` still works.
-            if (project.hasProperty('RELEASE_STORE_PASSWORD')) {
+            if (project.hasProperty('ANDROID_KEYSTORE_PASSWORD')) {
                 storeFile file('release-key.keystore')
-                storePassword project.property('RELEASE_STORE_PASSWORD')
-                keyAlias project.property('RELEASE_KEY_ALIAS')
-                keyPassword project.property('RELEASE_KEY_PASSWORD')
+                storePassword project.property('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias project.property('ANDROID_KEY_ALIAS')
+                keyPassword project.property('ANDROID_KEY_PASSWORD')
             } else {
                 storeFile file('debug.keystore')
                 storePassword 'android'

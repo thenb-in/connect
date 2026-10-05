@@ -1,0 +1,215 @@
+name: iOS Release
+
+# iOS builds are macOS-only and expensive, so unlike the Android pipeline they
+# run ONLY when a GitHub release is published (or manually). Signing is
+# automatic via the App Store Connect API key, so any Mac with Xcode works.
+#
+# Runner: a published release is too important to wait on the self-hosted Mac
+# being online, so it always runs on GitHub-hosted macOS (billed per minute).
+# A manual run defaults to the self-hosted Mac and can pick github-hosted.
+#
+# Jobs — each can be re-run on its own ("Re-run failed jobs"), and only `build`
+# ever compiles:
+#  - build   (macOS)  signed .ipa, attached to the GitHub Release straight away
+#                     (a manual run keeps it as a 2-day workflow artifact)
+#  - upload  (macOS)  that .ipa -> TestFlight; returns without waiting (minutes)
+#  - publish (Linux)  release only: waits for Apple's processing, sets the
+#                     Release notes as "What to Test" and, on a full release,
+#                     submits for App Store review with them as "What's New".
+#                     Pure API calls, so the wait is billed at the Linux rate,
+#                     not the 10x macOS rate.
+#
+#  - pre-release   -> TestFlight only
+#  - manual run    -> build, then per the `testflight` input:
+#                       read only (default) - Apple validates the .ipa, nothing
+#                                             uploaded, no build number used
+#                       no                  - build only
+#                       yes                 - upload to TestFlight (installable
+#                                             by testers)
+#                     Empty tag = the project's marketing version.
+#
+# Build numbers are always one past the latest App Store Connect upload (see
+# ios/fastlane/Fastfile), so a manual upload can never collide with a release.
+#
+# Release assets don't count toward the capped workflow-artifact storage, so a
+# release leaves no artifact on the run and nothing needs deleting afterwards.
+#
+# Shared verbatim between app repos: everything app-specific lives in
+# ios/fastlane/Appfile or is derived at run time (ipa name from the repo name,
+# workspace/scheme from ios/*.xcworkspace).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Version tag (e.g. 1.2.3). Leave empty to use the project version.'
+        required: false
+      testflight:
+        description: 'TestFlight: read only = Apple validates the build, no upload; yes = upload for testers'
+        required: true
+        default: 'read only'
+        type: choice
+        options:
+          - read only
+          - 'no'
+          - 'yes'
+      runner:
+        description: 'Where the build runs. Published releases always use github-hosted.'
+        required: true
+        default: 'self-hosted'
+        type: choice
+        options:
+          - self-hosted
+          - github-hosted
+
+# Read-only by default; each job asks for only what it needs.
+permissions:
+  contents: read
+
+# Don't run two App Store uploads at once (build numbers must stay ordered).
+concurrency:
+  group: ios-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # The one place the hosting is decided (see the header).
+    runs-on: ${{ fromJSON((github.event_name == 'release' || inputs.runner == 'github-hosted') && '"macos-latest"' || '["self-hosted","macOS"]') }}
+    timeout-minutes: 90
+    permissions:
+      # Attach the .ipa to the GitHub Release.
+      contents: write
+    outputs:
+      artifact: ${{ steps.build.outputs.artifact }}
+      version_name: ${{ steps.build.outputs.version_name }}
+      build_number: ${{ steps.build.outputs.build_number }}
+    steps:
+      # On a release github.ref is the release tag.
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # .env comes from .env.example; the optional API_URL secret overrides
+      # API_BASE_URL (react-native-dotenv inlines it into the JS bundle).
+      - name: Setup env
+        env:
+          API_URL: ${{ secrets.API_URL }}
+        run: |
+          if [ -f .env.example ]; then cp .env.example .env; else : > .env; fi
+          if [ -n "$API_URL" ]; then
+            grep -v '^API_BASE_URL=' .env > .env.tmp || true
+            echo "API_BASE_URL=$API_URL" >> .env.tmp
+            mv .env.tmp .env
+            echo "API_BASE_URL overridden from the API_URL secret"
+          fi
+
+      # Marketing version from the tag (a leading "v" is tolerated); no tag ->
+      # the project's version. The build number is not derived from the tag.
+      - name: Derive version from tag
+        id: ver
+        env:
+          TAG_NAME: ${{ github.event_name == 'release' && github.ref_name || github.event.inputs.tag_name }}
+        run: echo "version_name=${TAG_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # The ASC key authorises signing and looks up the next build number.
+      - name: Build .ipa
+        id: build
+        uses: ./.github/actions/composite_ios_build
+        with:
+          APP_NAME: ${{ github.event.repository.name }}
+          APP_VERSION_NAME: ${{ steps.ver.outputs.version_name }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_ASC_TEAM_ID: ${{ secrets.APPLE_ASC_TEAM_ID }}
+
+      # Manual "read only": runs here rather than in its own job, so no second
+      # macOS runner is started just to validate.
+      - name: Validate with App Store Connect (read only)
+        if: github.event_name != 'release' && inputs.testflight == 'read only'
+        working-directory: ios
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_ASC_TEAM_ID: ${{ secrets.APPLE_ASC_TEAM_ID }}
+          FASTLANE_HIDE_CHANGELOG: 'true'
+          FASTLANE_SKIP_UPDATE_CHECK: '1'
+        run: IOS_IPA="$(find build -name '*.ipa')" bundle exec fastlane ios validate
+
+  # Apple's uploader (altool) is macOS-only, so this stays on a Mac, but it is
+  # short: no JS, no Pods, no Xcode build. Releases always upload; a manual run
+  # only with testflight = yes.
+  upload:
+    needs: build
+    if: github.event_name == 'release' || inputs.testflight == 'yes'
+    runs-on: ${{ fromJSON((github.event_name == 'release' || inputs.runner == 'github-hosted') && '"macos-latest"' || '["self-hosted","macOS"]') }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up fastlane
+        uses: ./.github/actions/setup_fastlane
+
+      # Self-hosted runners keep the workspace; never pick up an old .ipa.
+      - name: Clear old builds
+        run: rm -rf ios/build
+
+      - name: Download .ipa from the GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${{ github.ref_name }}" --pattern '*.ipa' --dir ios/build
+
+      - name: Download .ipa artifact
+        if: github.event_name != 'release'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: ios/build
+
+      - name: Upload to TestFlight
+        working-directory: ios
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_ASC_TEAM_ID: ${{ secrets.APPLE_ASC_TEAM_ID }}
+          FASTLANE_HIDE_CHANGELOG: 'true'
+          FASTLANE_SKIP_UPDATE_CHECK: '1'
+        run: IOS_IPA="$(find build -name '*.ipa')" bundle exec fastlane ios upload
+
+  # Everything after the upload is App Store Connect API calls, so the
+  # processing wait (often 10-30 min) runs on Linux. A full (non-prerelease)
+  # release also submits for review, which needs the App Store listing for this
+  # version filled in on App Store Connect.
+  publish:
+    needs: [build, upload]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up fastlane
+        uses: ./.github/actions/setup_fastlane
+
+      - name: Release notes and App Store review
+        working-directory: ios
+        env:
+          APP_VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          APP_BUILD_NUMBER: ${{ needs.build.outputs.build_number }}
+          RELEASE_NOTES: ${{ github.event.release.body }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_ASC_TEAM_ID: ${{ secrets.APPLE_ASC_TEAM_ID }}
+          FASTLANE_HIDE_CHANGELOG: 'true'
+          FASTLANE_SKIP_UPDATE_CHECK: '1'
+        run: bundle exec fastlane ios publish submit:${{ !github.event.release.prerelease }}

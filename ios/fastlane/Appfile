@@ -1,0 +1,15 @@
+# connect — fastlane Appfile
+#
+# The Apple Developer Team ID is not a secret (it is already committed in
+# project.pbxproj), so it is defaulted here and can still be overridden by the
+# APPLE_TEAM_ID environment variable in CI.
+#
+# The App Store Connect API key IS secret and never lives here — see the Fastfile,
+# which reads it from ../.secrets/ locally or APPLE_API_KEY_BASE64 in CI.
+
+app_identifier "tech.navlakha.connect"
+
+team_id ENV["APPLE_TEAM_ID"].to_s.empty? ? "38MQ3RYJ8T" : ENV["APPLE_TEAM_ID"]
+
+# Only needed if the Apple ID belongs to more than one App Store Connect team.
+itc_team_id ENV["APPLE_ASC_TEAM_ID"] unless ENV["APPLE_ASC_TEAM_ID"].to_s.empty?

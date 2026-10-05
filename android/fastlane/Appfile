@@ -1,0 +1,6 @@
+# connect — fastlane Appfile (Android)
+#
+# Google Play auth is keyless (Workload Identity Federation) — see the
+# "Authenticate to Google Play" step in .github/workflows/android.yml.
+
+package_name "tech.navlakha.connect"

@@ -1,0 +1,171 @@
+name: 'iOS Build'
+description: 'Build a signed App Store .ipa via fastlane and attach it to the GitHub Release (or save it as a workflow artifact on a manual run)'
+
+inputs:
+  APP_NAME:
+    description: 'Prefix for the .ipa / artifact name (<APP_NAME>-<version>.ipa).'
+    required: true
+  APP_VERSION_NAME:
+    description: 'Marketing version, e.g. 1.2.3 (derived from the git tag). Empty = project version.'
+    required: false
+  APPLE_TEAM_ID:
+    description: 'Apple Developer Team ID (10 chars). Empty = the team_id in ios/fastlane/Appfile.'
+    required: false
+  APPLE_API_KEY_ID:
+    description: 'App Store Connect API Key ID.'
+    required: true
+  APPLE_API_ISSUER_ID:
+    description: 'App Store Connect API Issuer ID.'
+    required: true
+  APPLE_API_KEY_BASE64:
+    description: 'Base64-encoded App Store Connect API private key (.p8).'
+    required: true
+  APPLE_ASC_TEAM_ID:
+    description: 'App Store Connect team id (optional, multi-team accounts only).'
+    required: false
+
+outputs:
+  artifact:
+    description: 'Name of the workflow artifact holding the .ipa (manual runs; a release attaches it to the Release instead)'
+    value: ${{ steps.name.outputs.artifact }}
+  version_name:
+    description: 'CFBundleShortVersionString of the built .ipa'
+    value: ${{ steps.ipa.outputs.version_name }}
+  build_number:
+    description: 'CFBundleVersion of the built .ipa (one past the latest App Store Connect upload)'
+    value: ${{ steps.ipa.outputs.build_number }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Select Xcode
+      shell: bash
+      run: |
+        echo "Using Xcode: $(xcodebuild -version | head -n1)"
+        echo "Path: $(xcode-select -p)"
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    # Runs the postinstall hook (patch-package), matching the Android action so
+    # native modules autolink consistently.
+    - name: Install JS dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Set up fastlane
+      uses: ./.github/actions/setup_fastlane
+
+    # GitHub-hosted runners start empty; restoring Pods saves the CocoaPods
+    # download/install on every build. Self-hosted keeps ios/Pods in the workspace.
+    - name: Cache Pods (github-hosted)
+      if: runner.environment == 'github-hosted'
+      uses: actions/cache@v5
+      with:
+        path: ios/Pods
+        key: pods-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock', 'package-lock.json') }}
+
+    - name: Resolve artifact name
+      id: name
+      shell: bash
+      env:
+        APP_NAME: ${{ inputs.APP_NAME }}
+        APP_VERSION_NAME: ${{ inputs.APP_VERSION_NAME }}
+      run: |
+        SUFFIX="${APP_VERSION_NAME:-$(date +%Y%m%d-%H%M%S)-test}"
+        echo "artifact=${APP_NAME}-ios-${SUFFIX}" >> "$GITHUB_OUTPUT"
+        # Self-hosted runners keep the workspace; never pick up an old .ipa.
+        rm -rf ios/build
+
+    # Traceability: once a release has its .ipa attached, never rebuild it — a
+    # re-run must ship the exact binary that's on the Release. If it's already
+    # there, download it (so "Read version" and the upload job reuse it) and
+    # skip the build + the attach below.
+    - name: Reuse the .ipa already on the Release (skip rebuild)
+      id: existing
+      if: github.event_name == 'release'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if gh release view "${{ github.ref_name }}" -R "${{ github.repository }}" --json assets -q '.assets[].name' | grep -q '\.ipa$'; then
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          gh release download "${{ github.ref_name }}" -R "${{ github.repository }}" --pattern '*.ipa' --dir ios/build
+          echo "Reusing the .ipa already attached to ${{ github.ref_name }} — not rebuilding."
+        fi
+
+    # CocoaPods + the signed build happen in the fastlane lane: MARKETING_VERSION
+    # from the tag, CURRENT_PROJECT_VERSION one past the latest upload.
+    - name: Build .ipa
+      if: steps.existing.outputs.skip != 'true'
+      shell: bash
+      working-directory: ios
+      env:
+        APP_NAME: ${{ inputs.APP_NAME }}
+        APP_VERSION_NAME: ${{ inputs.APP_VERSION_NAME }}
+        APPLE_TEAM_ID: ${{ inputs.APPLE_TEAM_ID }}
+        APPLE_API_KEY_ID: ${{ inputs.APPLE_API_KEY_ID }}
+        APPLE_API_ISSUER_ID: ${{ inputs.APPLE_API_ISSUER_ID }}
+        APPLE_API_KEY_BASE64: ${{ inputs.APPLE_API_KEY_BASE64 }}
+        APPLE_ASC_TEAM_ID: ${{ inputs.APPLE_ASC_TEAM_ID }}
+        FASTLANE_HIDE_CHANGELOG: 'true'
+        FASTLANE_SKIP_UPDATE_CHECK: '1'
+        # Faster, non-interactive xcodebuild output.
+        FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: '120'
+      run: bundle exec fastlane ios build
+
+    # The version and build number actually in the .ipa, for the publish job.
+    - name: Read version from .ipa
+      id: ipa
+      shell: bash
+      run: |
+        IPA=$(ls ios/build/*.ipa)
+        # The app's own Info.plist, not those of nested extensions/frameworks.
+        PLIST=$(unzip -Z1 "$IPA" | grep -E '^Payload/[^/]+\.app/Info\.plist$')
+        unzip -p "$IPA" "$PLIST" > "$RUNNER_TEMP/Info.plist"
+        echo "version_name=$(plutil -extract CFBundleShortVersionString raw "$RUNNER_TEMP/Info.plist")" >> "$GITHUB_OUTPUT"
+        echo "build_number=$(plutil -extract CFBundleVersion raw "$RUNNER_TEMP/Info.plist")" >> "$GITHUB_OUTPUT"
+
+    # Saved as soon as it exists, so the upload job (and its re-runs) never
+    # needs a rebuild. A release attaches it straight to the GitHub Release
+    # (release assets don't count toward the capped workflow-artifact storage,
+    # and the upload job fetches it from there). The job needs contents: write.
+    # No --clobber: the reuse guard above means we only attach when nothing is
+    # there yet, so this is always the one and only binary for the Release.
+    - name: Attach .ipa to the GitHub Release
+      if: github.event_name == 'release' && steps.existing.outputs.skip != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh release upload "${{ github.ref_name }}" ios/build/*.ipa
+
+    # A manual run has no Release: the .ipa is a workflow artifact, only
+    # needed within the run.
+    - name: Upload .ipa as workflow artifact
+      if: github.event_name != 'release'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.name.outputs.artifact }}
+        path: ios/build/*.ipa
+        if-no-files-found: error
+        retention-days: 2
+
+    - name: Upload build logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.name.outputs.artifact }}-logs
+        path: |
+          ~/Library/Logs/gym/*.log
+          ios/build/*.log
+        if-no-files-found: ignore
+        retention-days: 7
+
+    # Self-hosted runners keep the workspace between jobs.
+    - name: Remove .env
+      if: always()
+      shell: bash
+      run: rm -f .env
