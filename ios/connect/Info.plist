@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Connect</string>
+	<string>Let's connect</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>Let's connect</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -33,6 +33,8 @@
 	</dict>
 	<key>NSContactsUsageDescription</key>
 	<string>Connect reads your contacts to help you stay in touch with people who matter to you.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Connect never browses or reads your photo library. This permission exists only so the system share sheet can handle files when you export or share your data.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>AntDesign.ttf</string>

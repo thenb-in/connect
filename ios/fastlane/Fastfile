@@ -221,15 +221,64 @@ platform :ios do
     UI.success("Authenticated. Team #{team_id}, app #{APP_ID}, latest TestFlight build: #{latest}")
   end
 
-  desc "One-time: register the bundle ID and create the App Store Connect app record"
+  desc "One-time: register the App ID (and create the ASC record if the API ever allows it) (name:, locale:, sku:)"
   lane :create_app do |options|
-    produce(
-      api_key: asc_api_key,
-      app_identifier: APP_ID,
-      app_name: options[:app_name] || SCHEME,
-      language: options[:language] || "English (U.K.)",
-      team_id: team_id,
-    )
+    # NOTE ON AUTH: this setup is App Store Connect API key only (no Apple ID).
+    # The key can register the App ID in the Developer Portal, but the App Store
+    # Connect API does NOT permit creating the app *record* — the `apps` resource
+    # allows only GET/UPDATE for any key, Admin included. That one record is a
+    # one-time manual step in the App Store Connect website (Apps → +). After it
+    # exists, `fastlane ios publish` and `deliver` manage everything by API.
+    asc_api_key # sets the global Spaceship::ConnectAPI token used below
+
+    if (existing = Spaceship::ConnectAPI::App.find(APP_ID))
+      UI.success("App '#{APP_ID}' already exists (#{existing.id}) — nothing to do")
+      next
+    end
+
+    app_name = options[:app_name] || SCHEME
+    sku      = (options[:sku] || APP_ID).to_s
+    # App Store Connect wants a locale code (en-US), not a display name.
+    locales  = { "English (U.S.)" => "en-US", "English (U.K.)" => "en-GB" }
+    locale   = options[:locale] || locales[options[:language]] || options[:language] || "en-US"
+
+    unless Spaceship::ConnectAPI::BundleId.all.any? { |b| b.identifier == APP_ID }
+      UI.message("Registering App ID #{APP_ID}")
+      Spaceship::ConnectAPI::BundleId.create(name: SCHEME.capitalize, identifier: APP_ID, platform: "IOS")
+      UI.success("Registered App ID #{APP_ID}")
+    end
+
+    UI.message("Creating App Store Connect record '#{app_name}' (#{locale}, SKU #{sku})")
+    begin
+      Spaceship::ConnectAPI::App.create(
+        name: app_name,
+        version_string: "1.0",
+        sku: sku,
+        primary_locale: locale,
+        bundle_id: APP_ID,
+        platforms: ["IOS"],
+      )
+    rescue => e
+      raise unless e.message.include?("does not allow 'CREATE'")
+      UI.user_error!(
+        "App ID is registered, but the App Store Connect API cannot create the app record " \
+        "(Apple allows this only in the website, not via an API key).\n" \
+        "Create it once at https://appstoreconnect.apple.com → Apps → + → New App:\n" \
+        "  Platform iOS · Name '#{app_name}' · Bundle ID #{APP_ID} · SKU #{sku} · Primary language #{locale}\n" \
+        "Then run `fastlane deliver` / `fastlane ios publish` to manage it by API."
+      )
+    end
+
+    # App Store Connect lists a freshly created app only after a short delay.
+    app = nil
+    30.times do
+      app = Spaceship::ConnectAPI::App.find(APP_ID)
+      break if app
+      UI.message("Waiting for App Store Connect to list the new app…")
+      sleep(10)
+    end
+    UI.user_error!("App was created but isn't listed yet — check App Store Connect") unless app
+    UI.success("Created #{APP_ID} (#{app.id})")
   end
 
   desc "Build the signed App Store .ipa into ios/build"

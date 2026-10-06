@@ -1,0 +1,32 @@
+Connect helps people keep in touch with contacts they haven't spoken to in a while.
+
+NO SIGN-IN REQUIRED
+There is no account system. Launch the app and the full feature set is available.
+
+PERMISSIONS
+• Contacts (NSContactsUsageDescription) — read-only, used to build the user's circle.
+  The app never modifies, deletes, or uploads contacts. If you decline the prompt,
+  the app still runs; you can add people manually to see the rest of the features.
+
+HOW THE RECONNECT ENGINE GETS ITS DATA ON iOS
+iOS provides no access to the system call history, so Connect does not attempt to
+read it. Instead it records the calls the user places from inside the app, using
+CXCallObserver to detect when the call connects and ends (CallObserverModule.m).
+Users can also add past calls manually. The reconnect suggestions are derived from
+that on-device record. Nothing is uploaded.
+
+BACKGROUND TASK
+When the user taps to call, the app begins a short UIApplication background task so
+CXCallObserver can report the call's duration after the system Phone app takes over.
+It ends as soon as the call ends (typically well under 30 seconds). It is not used
+for any background processing beyond recording call duration.
+
+AUTO-CATEGORISATION
+Groups can be filled in automatically. On iOS this runs entirely on-device using
+local heuristics — no network request is involved and no key is required.
+
+PRIVACY
+This build makes no network requests at all. No accounts, no analytics, no ads, no
+third-party trackers, and no backend of any kind. All user data stays in on-device
+storage and can be exported or deleted from Settings. The App Privacy answer is
+"Data Not Collected", which reflects the binary exactly.

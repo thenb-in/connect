@@ -1,0 +1,36 @@
+Connect is a calmer way to stay in touch with the people who matter.
+
+We all have people we mean to call back — an old college friend, a cousin, a former colleague — and somehow months slip by. Connect quietly keeps track of who you've drifted from and nudges you to reach out, before the silence becomes a year.
+
+No new social network. No feed. No noise. Just a gentle daily reminder of one or two people worth a quick call.
+
+HOW IT WORKS ON iPHONE
+
+Connect builds a private picture of your circle from your contacts, and from the calls you place through the app. Every time you call someone from Connect, it quietly notes it — so it always knows who you last spoke to and who's gone quiet. You can also add past calls by hand to give it a head start. Nothing is guessed, and nothing leaves your phone.
+
+WHAT CONNECT DOES
+
+• Reconnect today — a spotlight on the people you haven't spoken to in a while, so you always know who to call next.
+• Want to connect — hand-pick the people you most want to keep close, and Connect keeps them front and centre.
+• Groups — organise your circle into Family, College friends, Office, and more. A person can belong to many groups.
+• Say hi today — one gentle, randomised suggestion per group, so it never feels like a to-do list.
+• Milestones — light, optional streaks and goals that make staying in touch feel rewarding rather than like a chore.
+• Notes — jot a quick note on anyone ("loves long calls on Sundays") so you always pick up where you left off.
+• One-tap calling, SMS and WhatsApp from every person.
+• Export and import everything as portable JSON. Your data, your control.
+
+PRIVATE BY DESIGN
+
+Your relationships are nobody's business but yours.
+
+• Everything lives on your iPhone. There is no account, no server, and no sync.
+• Read-only with your contacts — Connect never edits, deletes, or posts anything.
+• No ads. No analytics. No tracking. No third-party SDKs watching you.
+
+A HEAD START ON GROUPING
+
+Sorting a few hundred contacts by hand is nobody's idea of fun, so Connect can take a first pass for you and let you correct whatever it gets wrong. It runs entirely on your iPhone — no key to set up, no network request, nothing sent anywhere.
+
+Connect is for anyone who wants to be a little more present with the people they love — without another noisy app demanding their attention.
+
+Stay in touch with the people who matter.
