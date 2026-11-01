@@ -16,8 +16,12 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IOS_DIR="$PROJECT_ROOT/ios"
-WORKSPACE="$IOS_DIR/connect.xcworkspace"
-SCHEME="connect"
+# Project-agnostic: auto-detect the single Xcode workspace in ios/ and derive
+# the scheme from its name (callLog.xcworkspace → callLog). Override either by
+# exporting WORKSPACE and/or SCHEME before running, for the uncommon cases
+# (several workspaces, or a scheme named differently from the workspace).
+WORKSPACE="${WORKSPACE:-$(find "$IOS_DIR" -maxdepth 1 -name '*.xcworkspace' | head -n1)}"
+SCHEME="${SCHEME:-$(basename "$WORKSPACE" .xcworkspace 2>/dev/null)}"
 CONFIG="Release"
 DERIVED_DATA="$IOS_DIR/build/DerivedData"
 
@@ -150,6 +154,7 @@ xcodebuild \
   -allowProvisioningDeviceRegistration \
   -quiet \
   CODE_SIGN_STYLE=Automatic \
+  CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES \
   build 2>&1 | tee "$XCBUILD_LOG" | grep -E "(error:|warning:|note:|\*\* BUILD)"
 BUILD_STATUS=${PIPESTATUS[0]}
 set -e
