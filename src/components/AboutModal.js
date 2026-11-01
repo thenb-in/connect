@@ -83,8 +83,9 @@ const AboutModal = ({ visible, onClose }) => (
           <View style={styles.privacyBody}>
             <Text style={styles.privacyTitle}>Read-only access</Text>
             <Text style={styles.privacyText}>
-              Connect only reads your contacts, call log to surface gentle
-              reminders — it never edits, deletes, or shares them.
+              {Platform.OS === 'ios'
+                ? 'Connect only reads your contacts to surface gentle reminders — it never edits, deletes, or shares them. iOS keeps the system call history private, so Connect records only the calls you place from inside the app.'
+                : 'Connect only reads your contacts, call log to surface gentle reminders — it never edits, deletes, or shares them.'}
             </Text>
           </View>
         </View>
@@ -105,9 +106,7 @@ const AboutModal = ({ visible, onClose }) => (
                 : 'Rate us on the Play Store'}
             </Text>
           </TouchableOpacity>
-        ) : (
-          <Text style={styles.comingSoon}>iOS app coming soon</Text>
-        )}
+        ) : null}
 
         <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
           <Text style={styles.closeBtnText}>Close</Text>
@@ -193,12 +192,6 @@ const styles = StyleSheet.create({
     fontSize: theme.font.small,
     textDecorationLine: 'underline',
     marginTop: theme.spacing.xs,
-  },
-  comingSoon: {
-    marginTop: theme.spacing.xs,
-    fontStyle: 'italic',
-    color: theme.colors.textSubtle,
-    fontSize: theme.font.small,
   },
   closeBtn: {
     marginTop: theme.spacing.lg,

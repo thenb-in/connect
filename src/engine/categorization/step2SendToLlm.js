@@ -491,8 +491,8 @@ const callOpenRouterOnce = (apiKey, prompt) =>
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
-      'HTTP-Referer': 'https://callbuddy.app',
-      'X-Title': 'CallBuddy Connect',
+      'HTTP-Referer': 'https://navlakha.tech',
+      'X-Title': 'Connect',
     },
     body: JSON.stringify({
       model: 'google/gemini-3.1-flash-lite',

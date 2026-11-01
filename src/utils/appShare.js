@@ -4,7 +4,9 @@ const ANDROID_PACKAGE = 'tech.navlakha.connect';
 
 export const APP_NAME = 'Connect';
 export const COMPANY_NAME = 'Navlakha Technologies';
-export const APP_WEBSITE_URL = 'https://navlakha.tech/connect';
+// Must stay a live, reachable page — it doubles as the App Store "Support URL"
+// and is linked from the About modal, so a 404 here is a review rejection.
+export const APP_WEBSITE_URL = 'https://navlakha.tech';
 export const PRIVACY_POLICY_URL = 'https://navlakha.tech/privacy';
 export const CONTACT_EMAIL = 'support@navlakha.tech';
 // React Native <Text> can't render HTML, so the credits are split into a
@@ -16,7 +18,9 @@ export const WHATSAPP_SUPPORT_NUMBER = '+918275269688';
 
 const PLAY_STORE_URL = `https://play.google.com/store/apps/details?id=${ANDROID_PACKAGE}`;
 
-// iOS build isn't published yet — surfaces show "coming soon" when this is null.
+// Set to `https://apps.apple.com/app/id<APP_ID>` once the App Store listing is
+// live. While it's null, Share hands out APP_WEBSITE_URL instead and the About
+// modal hides its "Rate us" row.
 const IOS_STORE_URL = null;
 
 export const getStoreUrl = () =>
@@ -27,9 +31,9 @@ export const shareApp = async () => {
   const lines = [
     `Try ${APP_NAME} — a calmer way to stay in touch with the people who matter to you.`,
     '',
-    storeUrl
-      ? storeUrl
-      : `Coming soon to iOS. Available now on Android: ${PLAY_STORE_URL}`,
+    // Before the iOS listing goes live there's no App Store URL to hand out;
+    // the site is the one link that's correct on either platform.
+    storeUrl || APP_WEBSITE_URL,
   ];
   try {
     await Share.share({ message: lines.join('\n') });
@@ -65,9 +69,9 @@ export const shareMilestone = async (milestone) => {
     flavor,
     '',
     `Staying close with ${APP_NAME} — the calmer way to keep your circle warm.`,
-    storeUrl
-      ? storeUrl
-      : `Coming soon to iOS. Available now on Android: ${PLAY_STORE_URL}`,
+    // Before the iOS listing goes live there's no App Store URL to hand out;
+    // the site is the one link that's correct on either platform.
+    storeUrl || APP_WEBSITE_URL,
   ];
   try {
     await Share.share({ message: lines.filter(Boolean).join('\n') });

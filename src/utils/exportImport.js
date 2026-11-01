@@ -25,7 +25,7 @@ const timestampStamp = () => {
  */
 export const writeAndShareExport = async (scopes) => {
   const payload = buildConnectExport(scopes);
-  const fileName = `callbuddy-connect-${timestampStamp()}.json`;
+  const fileName = `connect-export-${timestampStamp()}.json`;
   const path = `${RNFS.CachesDirectoryPath}/${fileName}`;
   const json = JSON.stringify(payload, null, 2);
   await RNFS.writeFile(path, json, 'utf8');

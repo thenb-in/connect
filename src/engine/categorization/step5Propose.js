@@ -1,3 +1,4 @@
+import { AI_GROUPING_ENABLED } from '../../featureFlags';
 import {
   getGroups,
   getLlmConfig,
@@ -56,10 +57,14 @@ import { enforceConstraints } from './step4Transform';
  */
 export const proposeContactGroups = async ({
   contacts,
-  useLocal = false,
+  useLocal: useLocalRequested = false,
   existingGroups = null,
   onProgress,
 }) => {
+  // Hard gate, not a UI convention: when AI grouping is compiled out (iOS 1.0)
+  // every caller is pinned to the on-device path, so no contact name can reach
+  // a third-party provider even if some entry point forgets to check the flag.
+  const useLocal = AI_GROUPING_ENABLED ? useLocalRequested : true;
   const fullList = (contacts || []).filter((c) => c?.normalized && c?.name);
   // Manual-locked contacts will be skipped at apply time anyway — keeping
   // them out of the categorisation pipeline means no LLM tokens spent on

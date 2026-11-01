@@ -36,6 +36,7 @@ import {
 import LlmKeyModal from '../components/LlmKeyModal';
 import CategoriseProposalModal from '../components/CategoriseProposalModal';
 import { useRecategorise } from '../hooks/useRecategorise';
+import { AI_GROUPING_ENABLED } from '../featureFlags';
 
 const COLOR_CHOICES = [
   '#2F6F8F', '#E07856', '#C98A2E', '#3C9D6A',
@@ -192,7 +193,9 @@ const GroupsScreen = ({ navigation, route }) => {
   }, []);
 
   const onRecategorise = useCallback(() => {
-    if (!hasLlmKey()) {
+    // With AI grouping compiled out there's no key to ask for — the engine
+    // runs its on-device heuristics instead, so go straight to the proposal.
+    if (AI_GROUPING_ENABLED && !hasLlmKey()) {
       setLlmPromptOpen(true);
       return;
     }
@@ -204,7 +207,9 @@ const GroupsScreen = ({ navigation, route }) => {
     if (getGroups().length > 0) {
       Alert.alert(
         'Re-categorise contacts',
-        'You already have groups. Should the LLM be allowed to propose new ones, or only re-tag contacts into your existing groups?',
+        AI_GROUPING_ENABLED
+          ? 'You already have groups. Should the LLM be allowed to propose new ones, or only re-tag contacts into your existing groups?'
+          : 'You already have groups. Should new groups be proposed, or should contacts only be re-tagged into your existing groups?',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -324,7 +329,9 @@ const GroupsScreen = ({ navigation, route }) => {
           <View style={styles.recategoriseRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.recategoriseTitle}>
-                {hasLlmKey() ? 'AI categorisation' : 'Auto-categorise'}
+                {AI_GROUPING_ENABLED && hasLlmKey()
+                  ? 'AI categorisation'
+                  : 'Auto-categorise'}
               </Text>
               <Text style={styles.recategoriseBody}>
                 {categoriseProgress
@@ -332,6 +339,8 @@ const GroupsScreen = ({ navigation, route }) => {
                     (categoriseProgress.tokens
                       ? ` · ${categoriseProgress.tokens.toLocaleString()} tokens`
                       : '')
+                  : !AI_GROUPING_ENABLED
+                  ? 'Sort your contacts into groups automatically, right on this device. You can fix up anything it gets wrong.'
                   : hasLlmKey()
                   ? 'Run the LLM once to seed your contact groups. You can re-run it later from Settings.'
                   : 'Add an LLM key for accurate grouping.'}

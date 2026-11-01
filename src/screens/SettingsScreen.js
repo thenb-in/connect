@@ -24,6 +24,8 @@ import {
   setAdvancedMode,
   getShowHiddenCards,
   setShowHiddenCards,
+  getDailyReminderEnabled,
+  setDailyReminderEnabled,
   getGroups,
   getLlmConfig,
   getLlmKeys,
@@ -38,6 +40,9 @@ import CategoriseProposalModal from '../components/CategoriseProposalModal';
 import ExportImportModal from '../components/ExportImportModal';
 import UserContextModal from '../components/UserContextModal';
 import { useRecategorise } from '../hooks/useRecategorise';
+import { AI_GROUPING_ENABLED } from '../featureFlags';
+import { analyzeFromCache } from '../engine/analysisService';
+import { enableDailyReminder, syncDailyReminder } from '../utils/dailyReminder';
 import {
   APP_NAME,
   COMPANY_NAME,
@@ -137,6 +142,30 @@ const SettingsScreen = ({ navigation }) => {
   const [showHiddenCards, setShowHiddenCardsState] = useState(() =>
     getShowHiddenCards(),
   );
+  const [dailyReminder, setDailyReminderState] = useState(() =>
+    getDailyReminderEnabled(),
+  );
+  const onToggleDailyReminder = useCallback(async (value) => {
+    if (value) {
+      const granted = await enableDailyReminder();
+      setDailyReminderState(granted);
+      if (!granted) {
+        Alert.alert(
+          'Notifications are off',
+          'Turn on notifications for Connect in your phone settings to get the daily reminder.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Open settings', onPress: () => Linking.openSettings() },
+          ],
+        );
+        return;
+      }
+    } else {
+      setDailyReminderEnabled(false);
+      setDailyReminderState(false);
+    }
+    syncDailyReminder(analyzeFromCache());
+  }, []);
   const onToggleShowHiddenCards = useCallback((value) => {
     setShowHiddenCards(value);
     setShowHiddenCardsState(value);
@@ -175,6 +204,8 @@ const SettingsScreen = ({ navigation }) => {
       // lands on the welcome splash (step 1) rather than mid-setup.
       clearOnboardingAcks();
     }
+    // Drops any scheduled reminder that could still name a deleted contact.
+    syncDailyReminder(null);
     setStep(STEP_DONE);
   };
 
@@ -223,7 +254,9 @@ const SettingsScreen = ({ navigation }) => {
       );
       return;
     }
-    if (!hasLlmKey()) {
+    // With AI grouping compiled out there's no key to ask for — the engine
+    // runs its on-device heuristics instead, so go straight to the proposal.
+    if (AI_GROUPING_ENABLED && !hasLlmKey()) {
       setLlmPromptOpen(true);
       return;
     }
@@ -234,7 +267,9 @@ const SettingsScreen = ({ navigation }) => {
     if (getGroups().length > 0) {
       Alert.alert(
         'Re-categorise contacts',
-        'You already have groups. Should the LLM be allowed to propose new ones, or only re-tag contacts into your existing groups?',
+        AI_GROUPING_ENABLED
+          ? 'You already have groups. Should the LLM be allowed to propose new ones, or only re-tag contacts into your existing groups?'
+          : 'You already have groups. Should new groups be proposed, or should contacts only be re-tagged into your existing groups?',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -302,7 +337,7 @@ const SettingsScreen = ({ navigation }) => {
             <View style={styles.rowBody}>
               <Text style={styles.rowTitle}>Share Connect</Text>
               <Text style={styles.rowSubtitle}>
-                Send the Play Store link to a friend.
+                Send a link to a friend.
               </Text>
             </View>
             <Icon
@@ -486,6 +521,34 @@ const SettingsScreen = ({ navigation }) => {
           </TouchableOpacity>
         </View>
 
+        <Text style={styles.sectionLabel}>Reminders</Text>
+
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => onToggleDailyReminder(!dailyReminder)}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconWrap, styles.iconWrapNeutral]}>
+              <Icon name="bell-outline" size={20} color={theme.colors.primary} />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>Daily reminder</Text>
+              <Text style={styles.rowSubtitle}>
+                A gentle nudge at 6:30 pm about someone worth calling. Scheduled
+                on this device.
+              </Text>
+            </View>
+            <View pointerEvents="none" style={styles.switchWrap}>
+              <Switch
+                value={dailyReminder}
+                onValueChange={onToggleDailyReminder}
+                trackColor={{ true: theme.colors.primary }}
+              />
+            </View>
+          </TouchableOpacity>
+        </View>
+
         <Text style={styles.sectionLabel}>Mode</Text>
 
         <View style={styles.card}>
@@ -500,9 +563,9 @@ const SettingsScreen = ({ navigation }) => {
             <View style={styles.rowBody}>
               <Text style={styles.rowTitle}>Advanced mode</Text>
               <Text style={styles.rowSubtitle}>
-                Unlocks AI categorisation — LLM key, your context, clustering,
-                and relationship analysis. Off keeps Connect to a simple import
-                + hand-picked groups.
+                {AI_GROUPING_ENABLED
+                  ? 'Unlocks AI categorisation — LLM key, your context, clustering, and relationship analysis. Off keeps Connect to a simple import + hand-picked groups.'
+                  : 'Unlocks your context, clustering, and relationship analysis. Off keeps Connect to a simple import + hand-picked groups.'}
               </Text>
             </View>
             {/* Display-only: the row TouchableOpacity owns the tap so the
@@ -522,10 +585,12 @@ const SettingsScreen = ({ navigation }) => {
         {advancedMode ? (
         <>
         <Text style={styles.sectionLabel}>
-          AI categorisation
+          {AI_GROUPING_ENABLED ? 'AI categorisation' : 'Auto-categorisation'}
         </Text>
 
         <View style={styles.card}>
+          {AI_GROUPING_ENABLED ? (
+          <>
           <TouchableOpacity
             style={styles.row}
             onPress={() => setLlmOpen(true)}
@@ -579,6 +644,8 @@ const SettingsScreen = ({ navigation }) => {
           </TouchableOpacity>
 
           <View style={styles.divider} />
+          </>
+          ) : null}
 
           <TouchableOpacity
             style={styles.row}

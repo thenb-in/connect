@@ -23,6 +23,7 @@ import {
   ensureCallLogPermission,
 } from '../utils/deviceCallLog';
 import { cleanupContacts } from '../utils/contactsCleanup';
+import { syncDailyReminder } from '../utils/dailyReminder';
 
 // The cached call-log snapshot only stores the fields the engine needs, which
 // keeps the MMKV payload small (an unfiltered call log on Android can run
@@ -199,6 +200,7 @@ export const refreshAnalysis = async (opts = {}) => {
   });
 
   setLastAnalyzedAt(analysis.generatedAt);
+  syncDailyReminder(analysis);
   return { ...analysis, refreshError: callLogRefreshError };
 };
 

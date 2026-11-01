@@ -21,6 +21,7 @@ import {
   requestImportPermissions,
 } from '../engine/analysisService';
 import {
+  addCallLog,
   getOnboardingAcks,
   markOnboardingStep,
   getPermsState,
@@ -48,6 +49,9 @@ import ClusterKeywordModal, {
   AUTO_SELECT_MIN_MEMBERS,
 } from '../components/ClusterKeywordModal';
 import ContactPickerModal from '../components/ContactPickerModal';
+import LastSpokeModal from '../components/LastSpokeModal';
+import { AI_GROUPING_ENABLED } from '../featureFlags';
+import { enableDailyReminder, syncDailyReminder } from '../utils/dailyReminder';
 import UserContextModal from '../components/UserContextModal';
 import { useRecategorise } from '../hooks/useRecategorise';
 
@@ -163,6 +167,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [done, setDone] = useState(false);
+  const [lastSpokePeople, setLastSpokePeople] = useState(null);
   // True while the "Use defaults" path is running its non-interactive setup
   // (request perms → import → auto-cluster → analyse). Drives the same
   // "Setting up Connect…" overlay as `done`, but without the auto-enter timer.
@@ -204,7 +209,9 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   // prior "Skip for now" decision so we don't re-prompt for a step the user
   // already dismissed.
   const [llmState, setLlmState] = useState(
-    initialLlm.key
+    !AI_GROUPING_ENABLED
+      ? 'skipped'
+      : initialLlm.key
       ? 'granted'
       : savedAcks.llmKey
       ? 'skipped'
@@ -306,8 +313,9 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   // the no-LLM-key path (immediately).
   const finishOnboarding = useCallback(async () => {
     setProgress((p) => ({ ...p, analyse: 'running' }));
+    let imported;
     try {
-      const imported = await refreshAnalysis({
+      imported = await refreshAnalysis({
         refreshContacts: false,
         refreshCallLogs: perms.callLog === 'granted',
       });
@@ -337,6 +345,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
     markOnboardingStep('analysed');
     setDone(true);
     setAnalyzing(false);
+    enableDailyReminder().then(() => syncDailyReminder(imported));
   }, [perms.callLog]);
 
   // Clustering + grouping review finished. Don't barge into the next step —
@@ -481,10 +490,39 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
       setWantPickerOpen(false);
       setProgress((p) => ({ ...p, wantToConnect: 'granted' }));
       markOnboardingStep('wantToConnect');
+      // iOS has no call history to read, so ask about the people just picked
+      // before the first analysis. The sheet's handlers finish onboarding.
+      const picked = new Set(phones || []);
+      if (Platform.OS === 'ios' && picked.size) {
+        setLastSpokePeople(wantContacts.filter((c) => picked.has(c.normalized)));
+        return;
+      }
+      finishOnboarding();
+    },
+    [finishOnboarding, wantContacts],
+  );
+
+  const onLastSpokeDone = useCallback(
+    (answers) => {
+      answers.forEach(({ contact, timestamp }) => {
+        addCallLog({
+          phoneNumber: contact.phone || contact.normalized,
+          type: 'OUTGOING',
+          timestamp,
+          connected: true,
+          source: 'backfill',
+        });
+      });
+      setLastSpokePeople(null);
       finishOnboarding();
     },
     [finishOnboarding],
   );
+
+  const onLastSpokeSkip = useCallback(() => {
+    setLastSpokePeople(null);
+    finishOnboarding();
+  }, [finishOnboarding]);
 
   const onWantToConnectSkip = useCallback(() => {
     setWantPickerOpen(false);
@@ -630,11 +668,22 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
         );
       }
 
+      // iOS has no call history, so Home would have nothing to reconnect from.
+      // Hand over to the picker + "when did you last talk?" sheet, whose
+      // handlers run the final analysis and finish onboarding.
+      if (Platform.OS === 'ios' && getContacts().length) {
+        setPreparingDefaults(false);
+        setStarted(true);
+        openWantPicker();
+        return;
+      }
+
       // 4. Final analysis so the new groups + call-log data show up on Home.
-      await refreshAnalysis({
+      const analysis = await refreshAnalysis({
         refreshContacts: false,
         refreshCallLogs: granted.callLog === 'granted',
       });
+      enableDailyReminder().then(() => syncDailyReminder(analysis));
 
       // Genuine success only: now that import + analysis have actually run, mark
       // the gate steps complete and enter Connect. Keeping these OUT of a
@@ -652,7 +701,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
       // do NOT mark onboarded.
       setPreparingDefaults(false);
     }
-  }, [handleEnter]);
+  }, [handleEnter, openWantPicker]);
 
   // Once setup finishes we show a brief loading screen and auto-enter Connect
   // after a short beat — no "Enter Connect" tap required.
@@ -769,20 +818,22 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
             <>
               <TouchableOpacity
                 style={[styles.primaryBtn, styles.welcomeBtn]}
-                onPress={() => {
-                  markOnboardingStep('welcome');
-                  setStarted(true);
-                }}
+                onPress={handleUseDefaults}
                 activeOpacity={0.85}
               >
-                <Text style={styles.primaryBtnText}>Personalize Connect</Text>
+                <Text style={styles.primaryBtnText}>Get started</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.skipBtn}
-                onPress={handleUseDefaults}
+                onPress={() => {
+                  markOnboardingStep('welcome');
+                  setAdvancedMode(true);
+                  setAdvancedModeState(true);
+                  setStarted(true);
+                }}
                 activeOpacity={0.7}
               >
-                <Text style={styles.skipBtnText}>Use defaults for now</Text>
+                <Text style={styles.skipBtnText}>Advanced setup</Text>
               </TouchableOpacity>
             </>
           ) : null}
@@ -809,9 +860,9 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
               <View style={styles.advancedTextWrap}>
                 <Text style={styles.advancedTitle}>Advanced setup</Text>
                 <Text style={styles.advancedBody}>
-                  Add an LLM key, tell us about you, and auto-cluster + analyse
-                  your contacts. Leave it off for a quick import — you can turn
-                  it on later in Settings.
+                  {AI_GROUPING_ENABLED
+                    ? 'Add an LLM key, tell us about you, and auto-cluster + analyse your contacts. Leave it off for a quick import — you can turn it on later in Settings.'
+                    : 'Tell us about you, and auto-cluster + analyse your contacts. Leave it off for a quick import — you can turn it on later in Settings.'}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -855,7 +906,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
                 body: 'Used purely to spot communication patterns — no audio or content is read.',
                 state: perms.callLog,
               },
-              advancedMode && {
+              advancedMode && AI_GROUPING_ENABLED && {
                 icon: 'creation',
                 title: 'LLM key (optional)',
                 body: 'Lets us auto-group contacts into Friends, Office, Family, …. You can add it later from Settings.',
@@ -864,7 +915,7 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
               advancedMode && {
                 icon: 'account-question-outline',
                 title: 'Tell us about you (optional)',
-                body: 'A few quick facts — schools, colleges, workplaces, places lived — so the LLM names groups correctly. Always skippable.',
+                body: 'A few quick facts — schools, colleges, workplaces, places lived — so Connect names groups correctly. Always skippable.',
                 state: contextState,
               },
               showWorkSteps && {
@@ -1049,6 +1100,13 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
         confirmLabel="Want to connect"
         onConfirm={onWantToConnectConfirm}
         onSkip={onWantToConnectSkip}
+      />
+
+      <LastSpokeModal
+        visible={!!lastSpokePeople}
+        people={lastSpokePeople || []}
+        onDone={onLastSpokeDone}
+        onSkip={onLastSpokeSkip}
       />
 
       <ClusterKeywordModal

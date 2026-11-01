@@ -7,6 +7,12 @@ PERMISSIONS
 • Contacts (NSContactsUsageDescription) — read-only, used to build the user's circle.
   The app never modifies, deletes, or uploads contacts. If you decline the prompt,
   the app still runs; you can add people manually to see the rest of the features.
+• Notifications — optional. A local daily reminder suggesting someone to call, scheduled
+  on the device and switchable in Settings. No push server is involved.
+
+FIRST RUN
+Tap "Get started", allow Contacts, pick a few people, then choose roughly when you last
+spoke to each. With at least 3 people answered, the Reconnect card appears on Home.
 
 HOW THE RECONNECT ENGINE GETS ITS DATA ON iOS
 iOS provides no access to the system call history, so Connect does not attempt to

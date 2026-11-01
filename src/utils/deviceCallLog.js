@@ -24,7 +24,7 @@ export const ensureCallLogPermission = async ({ throwOnDeny = false } = {}) => {
   const granted = await requestPermission(
     PermissionsAndroid.PERMISSIONS.READ_CALL_LOG,
     'Call log access',
-    'Call Buddy uses call history to sync your calls with contacts and show them in Recent Calls.',
+    'Connect uses call history to show who you have gone quiet with and when you last spoke.',
   );
 
   if (!granted) {

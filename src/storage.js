@@ -69,6 +69,7 @@ const K = {
   // iOS-only, advanced-mode opt-in: force-show home lanes that are normally
   // hidden on iOS when they have no data (e.g. "Missed connections").
   SHOW_HIDDEN_CARDS: 'connect.showHiddenCards',
+  DAILY_REMINDER_ENABLED: 'connect.dailyReminderEnabled',
   PERMS: 'connect.permsState',
   // Legacy single-key shape — migrated into LLM_KEYS / LLM_ACTIVE on first
   // read, then deleted. Kept here so clearConnectStorage still nukes them.
@@ -241,7 +242,9 @@ export const setCallLogs = (logs) => writeJson(K.CALL_LOGS, logs || []);
 //   callId      links a tapped call to its dialer entry and final monitored
 //               result so the iOS CXCallObserver can fill in / remove the row.
 //   provisional true for an optimistic "tap" row awaiting monitor correction.
-//   source      'tap' | 'callkit' | 'calllog' | 'manual' — audit of origin.
+//   source      'tap' | 'callkit' | 'calllog' | 'manual' | 'backfill' — audit of
+//               origin. 'backfill' is a rough onboarding estimate of the last
+//               call: it feeds the engine but never counts as a reconnect.
 export const addCallLog = ({
   phoneNumber,
   type,
@@ -736,7 +739,7 @@ export const getReconnects = () => {
     // reconnect — an unanswered tap that the monitor later removes (or never
     // resolves) would otherwise inflate reconnect/milestone counts forever. Once
     // reconciled, the row is non-provisional and counts here.
-    if (log?.provisional) { return; }
+    if (log?.provisional || log?.source === 'backfill') { return; }
     if (!isLogConnected(log)) { return; }
     const key = normalizeLast10(log?.phoneNumber);
     if (!key) { return; }
@@ -771,7 +774,7 @@ export const getReconnectEvents = () => {
   const since = getMilestoneSince();
   const out = [];
   (getCallLogs() || []).forEach((log) => {
-    if (log?.provisional) { return; }
+    if (log?.provisional || log?.source === 'backfill') { return; }
     if (!isLogConnected(log)) { return; }
     const ts = getLogTimestamp(log);
     if (!ts || ts < since) { return; }
@@ -1178,6 +1181,14 @@ export const getShowHiddenCards = () =>
 export const setShowHiddenCards = (value) =>
   storage.set(K.SHOW_HIDDEN_CARDS, Boolean(value));
 
+// ---------- Daily reminder ----------
+
+export const getDailyReminderEnabled = () =>
+  Boolean(storage.getBoolean(K.DAILY_REMINDER_ENABLED));
+
+export const setDailyReminderEnabled = (value) =>
+  storage.set(K.DAILY_REMINDER_ENABLED, Boolean(value));
+
 // ---------- Clear all (used by logout or factory reset) ----------
 
 export const clearConnectStorage = () => {
@@ -1288,6 +1299,8 @@ const EXPORT_SCOPE_SCHEMA = Object.freeze({
   },
 });
 
+// Kept from the app's earlier name: existing backups carry this value, and
+// import rejects files that don't match it.
 const EXPORT_FORMAT = 'callbuddy-connect-export';
 const EXPORT_VERSION = 1;
 
