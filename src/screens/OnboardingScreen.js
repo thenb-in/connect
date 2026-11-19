@@ -236,6 +236,12 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
   const scrollRef = useRef(null);
 
   const handleAllow = async () => {
+    // Once the user has declined, the OS won't show its prompt again — the
+    // only way to change their mind is the Settings app (App Store 5.1.1(iv)).
+    if (perms.contacts === 'blocked') {
+      Linking.openSettings();
+      return;
+    }
     setLoading(true);
     try {
       // requestImportPermissions now normalises and persists the perms shape
@@ -1052,17 +1058,28 @@ const OnboardingScreen = ({ navigation, onFinished }) => {
 
           <View style={[styles.actions, { marginBottom: sectionGap }]}>
           {!permsReady ? (
-            <TouchableOpacity
-              style={[styles.primaryBtn, loading && styles.btnDisabled]}
-              disabled={loading}
-              onPress={handleAllow}
-            >
-              {loading ? (
-                <ActivityIndicator color={theme.colors.surface} />
-              ) : (
-                <Text style={styles.primaryBtnText}>Allow access</Text>
-              )}
-            </TouchableOpacity>
+            <>
+              {perms.contacts === 'blocked' ? (
+                <Text style={styles.permsDeniedNote}>
+                  Contacts access is turned off. Connect needs it to show the
+                  people you can reconnect with. You can turn it on any time in
+                  Settings.
+                </Text>
+              ) : null}
+              <TouchableOpacity
+                style={[styles.primaryBtn, loading && styles.btnDisabled]}
+                disabled={loading}
+                onPress={handleAllow}
+              >
+                {loading ? (
+                  <ActivityIndicator color={theme.colors.surface} />
+                ) : (
+                  <Text style={styles.primaryBtnText}>
+                    {perms.contacts === 'blocked' ? 'Open Settings' : 'Continue'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </>
           ) : !canAnalyze ? null : !done ? (
             <TouchableOpacity
               style={[styles.primaryBtn, analyzing && styles.btnDisabled]}
@@ -1416,6 +1433,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   btnDisabled: { opacity: 0.6 },
+  permsDeniedNote: {
+    fontSize: theme.font.tiny,
+    color: theme.colors.textSubtle,
+    textAlign: 'center',
+    marginBottom: theme.spacing.md,
+    paddingHorizontal: theme.spacing.lg,
+  },
   primaryBtnText: {
     color: theme.colors.surface,
     fontWeight: '700',

@@ -26,10 +26,11 @@ export const ensureContactsPermission = async () => {
     const res = await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.READ_CONTACTS,
       {
-        title: 'Contacts Permission',
-        message: 'Allow access to your phone book to import contacts.',
-        buttonPositive: 'Allow',
-        buttonNegative: 'Deny',
+        title: 'Contacts',
+        message:
+          'Connect reads your contacts to help you stay in touch with people who matter to you.',
+        buttonPositive: 'Continue',
+        buttonNegative: 'Not now',
       },
     );
     return {
