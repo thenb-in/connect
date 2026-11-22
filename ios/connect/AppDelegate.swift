@@ -13,6 +13,9 @@ class AppDelegate: RCTAppDelegate {
     // They will be passed down to the ViewController used by React Native.
     self.initialProps = [:]
 
+    // iOS 27 SDK requires the UIScene lifecycle: SceneDelegate creates the window.
+    self.automaticallyLoadReactNativeWindow = false
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -26,5 +29,29 @@ class AppDelegate: RCTAppDelegate {
 #else
     Bundle.main.url(forResource: "main", withExtension: "jsbundle")
 #endif
+  }
+}
+
+/// Hosts the React Native root view in a UIWindowScene (required by the iOS 27 SDK).
+class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+  var window: UIWindow?
+
+  func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+    guard let windowScene = scene as? UIWindowScene,
+          let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
+
+    let rootView = appDelegate.rootViewFactory.view(
+      withModuleName: appDelegate.moduleName ?? "connect",
+      initialProperties: appDelegate.initialProps,
+      launchOptions: nil
+    )
+    let rootViewController = appDelegate.createRootViewController()
+    appDelegate.setRootView(rootView, toRootViewController: rootViewController)
+
+    let window = UIWindow(windowScene: windowScene)
+    window.rootViewController = rootViewController
+    window.makeKeyAndVisible()
+    self.window = window
+    appDelegate.window = window
   }
 }

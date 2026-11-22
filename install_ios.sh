@@ -6,6 +6,9 @@
 # with your team, updating the provisioning profile so the app can install.
 # (Free/personal teams can register devices too, up to their limit.)
 #
+# Workspace + scheme are auto-detected from the single ios/*.xcworkspace, so this
+# script is app-agnostic.
+#
 # Usage:
 #   ./install_ios.sh                    # pick from connected devices (prompts if >1)
 #   ./install_ios.sh <udid>             # target a device (CoreDevice id or hardware UDID)
@@ -16,33 +19,50 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IOS_DIR="$PROJECT_ROOT/ios"
-# Project-agnostic: auto-detect the single Xcode workspace in ios/ and derive
-# the scheme from its name (callLog.xcworkspace → callLog). Override either by
-# exporting WORKSPACE and/or SCHEME before running, for the uncommon cases
-# (several workspaces, or a scheme named differently from the workspace).
-WORKSPACE="${WORKSPACE:-$(find "$IOS_DIR" -maxdepth 1 -name '*.xcworkspace' | head -n1)}"
-SCHEME="${SCHEME:-$(basename "$WORKSPACE" .xcworkspace 2>/dev/null)}"
-CONFIG="Release"
 DERIVED_DATA="$IOS_DIR/build/DerivedData"
+CONFIG="Release"
 
 cyan()  { printf "\033[1;36m%s\033[0m\n" "$*"; }
 green() { printf "\033[1;32m%s\033[0m\n" "$*"; }
 red()   { printf "\033[1;31m%s\033[0m\n" "$*" >&2; }
 
-# Available, non-Watch devices, one raw line each.
+# Auto-detect the single workspace + its scheme (same name).
+shopt -s nullglob
+WORKSPACES=("$IOS_DIR"/*.xcworkspace)
+shopt -u nullglob
+if [[ ${#WORKSPACES[@]} -ne 1 ]]; then
+  red "Expected exactly one ios/*.xcworkspace, found ${#WORKSPACES[@]}. Did you run 'cd ios && pod install'?"
+  exit 1
+fi
+WORKSPACE="${WORKSPACES[0]}"
+SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+
+# Connected physical iPhones/iPads as "coreId<TAB>hwUdid<TAB>name" lines, read from
+# devicectl's JSON (its table output changes between Xcode versions). The CoreDevice
+# id is what devicectl uses; the hardware UDID is what xcodebuild -destination expects.
 list_devices() {
-  xcrun devicectl list devices 2>/dev/null | awk 'NR>2 && /available/ && !/Watch/ {print}'
+  local json
+  json="$(mktemp)"
+  xcrun devicectl list devices --json-output "$json" >/dev/null 2>&1
+  python3 - "$json" <<'PY'
+import json, sys
+for d in json.load(open(sys.argv[1]))["result"]["devices"]:
+    hw, conn = d["hardwareProperties"], d["connectionProperties"]
+    if hw.get("reality") == "physical" and hw.get("platform") == "iOS" \
+            and conn.get("pairingState") == "paired" and conn.get("transportType"):
+        print(d["identifier"], hw["udid"], d["deviceProperties"]["name"], sep="\t")
+PY
+  rm -f "$json"
 }
 
-# Fill NAME and HWUDID for a CoreDevice id. Hardware UDID (8hex-16hex) is what
-# xcodebuild -destination expects; the CoreDevice id (a UUID) is what devicectl uses.
+# Fill NAME and HWUDID for a CoreDevice id from the list above.
 NAME=""
 HWUDID=""
 resolve_device() {
-  local details
-  details="$(xcrun devicectl device info details --device "$1" 2>/dev/null)"
-  HWUDID="$(printf '%s\n' "$details" | grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}' | head -n1)"
-  NAME="$(printf '%s\n' "$details" | awk -F': ' '/ name:/{print $2; exit}')"
+  local i
+  for i in "${!CORE_IDS[@]}"; do
+    if [[ "${CORE_IDS[$i]}" == "$1" ]]; then NAME="${NAMES[$i]}"; HWUDID="${HWUDIDS[$i]}"; return; fi
+  done
 }
 
 # ── Parse args ────────────────────────────────────────────────────────────────
@@ -54,7 +74,7 @@ for arg in "$@"; do
     --clean) CLEAN=1 ;;
     --list)  LIST=1 ;;
     -h|--help)
-      sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) DEVICE_ID="$arg" ;;
@@ -64,10 +84,10 @@ done
 # ── Enumerate connected devices ───────────────────────────────────────────────
 cyan "Connected iOS devices:"
 CORE_IDS=()
-while IFS= read -r line; do
-  [[ -z "$line" ]] && continue
-  id="$(printf '%s\n' "$line" | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' | head -n1)"
-  [[ -n "$id" ]] && CORE_IDS+=("$id")
+HWUDIDS=()
+NAMES=()
+while IFS=$'\t' read -r core hw name; do
+  CORE_IDS+=("$core"); HWUDIDS+=("$hw"); NAMES+=("$name")
 done < <(list_devices)
 
 if [[ ${#CORE_IDS[@]} -eq 0 ]]; then
@@ -130,11 +150,6 @@ cyan "  Hardware UDID:$HWUDID"
 cyan "Workspace:      $WORKSPACE"
 cyan "Scheme:         $SCHEME ($CONFIG)"
 
-if [[ ! -d "$WORKSPACE" ]]; then
-  red "Workspace not found. Did you run 'cd ios && pod install'?"
-  exit 1
-fi
-
 if [[ $CLEAN -eq 1 ]]; then
   cyan "Cleaning DerivedData…"
   rm -rf "$DERIVED_DATA"
@@ -154,7 +169,6 @@ xcodebuild \
   -allowProvisioningDeviceRegistration \
   -quiet \
   CODE_SIGN_STYLE=Automatic \
-  CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES \
   build 2>&1 | tee "$XCBUILD_LOG" | grep -E "(error:|warning:|note:|\*\* BUILD)"
 BUILD_STATUS=${PIPESTATUS[0]}
 set -e
